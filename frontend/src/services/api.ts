@@ -44,3 +44,15 @@ export async function fetchSubscriptions(): Promise<{
 }> {
   return (await client.get("/subscriptions")).data;
 }
+
+export async function fetchRelated(
+  slug: string,
+  kind: "editions" | "dlc",
+  page = 1,
+): Promise<import("../types").RelatedResponse> {
+  return (
+    await client.get("/games/" + encodeURIComponent(slug) + "/related", {
+      params: { kind, page, limit: 8 },
+    })
+  ).data;
+}

@@ -330,3 +330,5 @@ export async function steamPage(
   }
   return { data: games, total, hasMore: offset + limit < total };
 }
+
+export { request as steamRequest };

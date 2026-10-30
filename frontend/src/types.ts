@@ -71,3 +71,21 @@ export interface SubscriptionPlan {
   note: string;
   prices: SubscriptionPrice[];
 }
+
+export interface RelatedProduct {
+  id: string;
+  title: string;
+  kind: "edition" | "bundle" | "package" | "dlc" | "soundtrack";
+  url: string;
+}
+export interface RelatedResponse {
+  data: RelatedProduct[];
+  meta: {
+    page: number;
+    total: number | null;
+    hasMore: boolean;
+    supported: boolean;
+    partial: boolean;
+    storeUrl: string | null;
+  };
+}

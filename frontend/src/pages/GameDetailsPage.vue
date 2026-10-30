@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import RelatedContent from "../components/RelatedContent.vue";
 import SystemRequirements from "../components/SystemRequirements.vue";
 import GameCover from "../components/GameCover.vue";
 import { onMounted, ref } from "vue";
@@ -116,6 +117,7 @@ async function setPriceAlert() {
       <div class="detail-main">
         <h2>About the game</h2>
         <p class="description">{{ game.description }}</p>
+        <RelatedContent :game="game" />
         <SystemRequirements :game="game" />
         <PriceHistoryChart
           v-if="game.slug.startsWith('steam-')"

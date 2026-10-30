@@ -3,6 +3,7 @@ import { rawgCatalogue, rawgDetail } from "./integrations/storefronts.js";
 import { publicCatalogue, publicGame } from "./integrations/publicStores.js";
 import { catalogueSources } from "./integrations/sources.js";
 import { getSubscriptions } from "./integrations/subscriptions.js";
+import { gameRelated } from "./integrations/related.js";
 import { steamAuth } from "./steamAuth.js";
 import cors from "cors";
 import express from "express";
@@ -120,6 +121,33 @@ app.get("/api/games", async (req, res) => {
     return res
       .status(502)
       .json({ error: "Storefront data is unavailable. Please retry." });
+  }
+});
+app.get("/api/games/:slug/related", async (req, res) => {
+  const parsed = z
+    .object({
+      kind: z.enum(["editions", "dlc"]).default("editions"),
+      page: z.coerce.number().int().min(1).max(10000).default(1),
+      limit: z.coerce.number().int().min(1).max(20).default(8),
+    })
+    .safeParse(req.query);
+  if (!parsed.success)
+    return res.status(400).json({ error: "Invalid related-product filters" });
+  try {
+    const f = parsed.data;
+    const result = await gameRelated(
+      String(req.params.slug),
+      f.kind,
+      f.page,
+      f.limit,
+    );
+    return result
+      ? res.json(result)
+      : res.status(404).json({ error: "Game not found" });
+  } catch {
+    return res
+      .status(502)
+      .json({ error: "Related products could not be loaded. Please retry." });
   }
 });
 app.get("/api/games/:slug", async (req, res) => {

@@ -647,3 +647,5 @@ function stripMarkup(value: string) {
     .replace(/\s+/g, " ")
     .trim();
 }
+
+export { request as publicStoreRequest };

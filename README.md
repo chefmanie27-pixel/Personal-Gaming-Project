@@ -126,3 +126,9 @@ PC game details now display minimum and recommended requirements grouped by oper
 Requirements are normalized to plain text and rendered using Vue text interpolation, never storefront HTML. Missing tiers remain missing, empty placeholders are omitted, and Microsoft device-availability labels are not treated as hardware specs. Optional requirements requests use the existing provider cache/timeouts and do not prevent game details from loading if the requirements source fails. Console-only listings exclude the PC section.
 
 Verification includes 23 backend regression tests, a successful production build, live Steam/GOG/Xbox PC requirement reads, and hidden-browser checks for two-column desktop and stacked mobile layouts, source links, missing requirements, and console exclusion.
+
+## Editions and DLC
+
+Game details include an expandable Editions & DLC panel, loaded only when opened. GET /api/games/:slug/related accepts kind=editions or kind=dlc, page, and a bounded limit. Steam lists official purchase options, bundles from its purchase area, and linked DLC; GOG lists explicit editions and DLC, including DLC reached through a pack's included base-game relationships. Xbox/Xbox PC show the public add-on preview when supplied. Other storefronts and unsupported edition feeds link to the game's official store page.
+
+Related products open their actual storefront pages, including DLC that cannot be opened as a base game in GameVault. Lists use provider IDs rather than title guesses. Partial feeds are labelled, DLC pages can load more results, and source failures have their own retry control. No related-product database migration is required for this live view.
