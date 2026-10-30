@@ -2,6 +2,7 @@ import { rawgRequirements } from "./requirements.js";
 import { config } from "../config.js";
 import type { SteamGame } from "./steam.js";
 interface Entry {
+  stores?: { store: { slug: string; name?: string } }[];
   id: number;
   name: string;
   background_image?: string;
@@ -41,6 +42,24 @@ function map(g: Entry): SteamGame {
     reviewCount: "",
     price: null,
     store: "Storefronts",
+    storefronts: [
+      ...new Set(
+        (g.stores ?? []).flatMap(({ store }) => {
+          const id = (
+            {
+              steam: "steam",
+              gog: "gog",
+              "epic-games": "epic",
+              "playstation-store": "playstation",
+              "xbox-store": "xbox",
+              xbox360: "xbox",
+              nintendo: "nintendo",
+            } as Record<string, string>
+          )[store.slug];
+          return id ? [id] : [];
+        }),
+      ),
+    ],
     storeUrl: "https://rawg.io/games/" + g.id,
     featured: false,
     status:

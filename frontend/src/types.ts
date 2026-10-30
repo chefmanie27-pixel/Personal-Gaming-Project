@@ -23,6 +23,7 @@ export interface Game {
   price: number | null;
   originalPrice?: number;
   store: string;
+  storefronts?: string[];
   storeLinks?: string[];
   storeUrl?: string;
   observedAt?: string;

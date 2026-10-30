@@ -19,6 +19,7 @@ export interface SteamGame {
   price: number | null;
   originalPrice?: number;
   store: string;
+  storefronts?: string[];
   storeUrl: string;
   featured: boolean;
   status: "released" | "upcoming";

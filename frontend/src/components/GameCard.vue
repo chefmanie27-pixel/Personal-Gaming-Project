@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import StorefrontBadges from "./StorefrontBadges.vue";
 import GameCover from "./GameCover.vue";
 import type { Game } from "../types";
 
@@ -23,6 +24,7 @@ const discount = (game: Game) =>
         :fallback="game.coverFallback"
         :title="game.title"
       />
+      <StorefrontBadges :game="game" />
       <span v-if="discount(game)" class="discount">-{{ discount(game) }}%</span>
       <span
         class="score-badge"
