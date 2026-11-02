@@ -16,3 +16,16 @@ const schema = z.object({
 });
 
 export const config = schema.parse(process.env);
+
+if (
+  process.env.NODE_ENV === "production" &&
+  (!process.env.JWT_SECRET ||
+    config.JWT_SECRET.startsWith("development-only-secret") ||
+    !process.env.DATABASE_URL ||
+    !config.FRONTEND_ORIGIN.startsWith("https://") ||
+    !config.PUBLIC_API_ORIGIN.startsWith("https://"))
+) {
+  throw new Error(
+    "Production requires explicit database/JWT credentials and HTTPS public origins.",
+  );
+}

@@ -12,6 +12,8 @@ export interface Game {
   cover: string;
   coverFallback?: string;
   hero: string;
+  screenshots?: string[];
+  trailers?: { name: string; url: string; poster?: string }[];
   systemRequirements?: SystemRequirements[];
   genres: string[];
   platforms: string[];
@@ -24,6 +26,7 @@ export interface Game {
   originalPrice?: number;
   store: string;
   storefronts?: string[];
+  offerScope?: "catalogue" | "promotions";
   storeLinks?: string[];
   storeUrl?: string;
   observedAt?: string;
@@ -88,5 +91,28 @@ export interface RelatedResponse {
     supported: boolean;
     partial: boolean;
     storeUrl: string | null;
+  };
+}
+
+export type DealSource =
+  "steam" | "gog" | "xbox" | "xboxpc" | "nintendo" | "epic";
+export interface DealsResponse {
+  data: Array<Game & { discount: number }>;
+  meta: {
+    currency: string;
+    sourceType: string;
+    hasMore: boolean;
+    nextCursor: Partial<Record<DealSource, number>>;
+    partial: boolean;
+    sources: Array<{
+      id: DealSource;
+      name: string;
+      page: number;
+      hasMore: boolean;
+      scope: string;
+      error: string | null;
+    }>;
+    updatedAt: string | null;
+    scope: string;
   };
 }

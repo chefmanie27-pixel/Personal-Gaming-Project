@@ -1,3 +1,4 @@
+import { microsoftPrice, nintendoPrices } from "./regionalPrices.js";
 import {
   gogRequirements,
   microsoftRequirements,
@@ -15,6 +16,7 @@ export interface StoreFilters {
   platform: string;
   minScore?: number;
   maxPrice?: number;
+  dealsOnly?: boolean;
 }
 export type PublicSource = "gog" | "xbox" | "xboxpc" | "nintendo" | "epic";
 class StoreHttpError extends Error {
@@ -63,9 +65,9 @@ const gogEntry = z.object({
   slug: z.string(),
   title: z.string(),
   productType: z.string(),
-  coverVertical: urlSchema.optional(),
-  coverHorizontal: urlSchema.optional(),
-  galaxyBackgroundImage: urlSchema.optional(),
+  coverVertical: urlSchema.nullish(),
+  coverHorizontal: urlSchema.nullish(),
+  galaxyBackgroundImage: urlSchema.nullish(),
   releaseDate: z.string().optional(),
   developers: z.array(z.string()).optional(),
   publishers: z.array(z.string()).optional(),
@@ -133,7 +135,7 @@ function gogGame(g: z.infer<typeof gogEntry>, time: string) {
   return {
     ...result,
     cover: g.coverVertical ?? g.coverHorizontal ?? "",
-    coverFallback: g.coverHorizontal,
+    coverFallback: g.coverHorizontal ?? undefined,
     hero: g.galaxyBackgroundImage ?? g.coverHorizontal ?? "",
     genres: g.genres?.map((x) => x.name) ?? [],
     releaseDate: g.releaseDate?.replaceAll(".", "-") ?? "",
@@ -164,9 +166,13 @@ function output(
   hasMore: boolean,
   scope: string,
 ) {
-  remember(games);
+  const ordered =
+    f.sort === "price"
+      ? [...games].sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity))
+      : games;
+  remember(ordered);
   return {
-    data: games.filter(
+    data: ordered.filter(
       (g) =>
         (!f.genre ||
           g.genres.some((v) => {
@@ -204,6 +210,7 @@ const msImage = z.object({
   Height: z.number().optional(),
 });
 const msEntry = z.object({
+  DisplaySkuAvailabilities: z.unknown().optional(),
   ProductId: z.string().regex(/^[A-Z0-9]{12}$/),
   LocalizedProperties: z.array(
     z.object({
@@ -242,6 +249,7 @@ function msGame(
   const cover =
     images.find((x) => x.ImagePurpose === "Poster") ??
     images.find((x) => x.ImagePurpose === "BoxArt") ??
+    images.find((x) => x.ImagePurpose === "BrandedKeyArt") ??
     images.find((x) => x.ImagePurpose === "Thumbnail");
   const hero =
     images.find((x) => x.ImagePurpose === "SuperHeroArt") ??
@@ -249,6 +257,10 @@ function msGame(
     cover;
   return {
     ...base(source, g.ProductId, local.ProductTitle, time),
+    ...microsoftPrice(
+      g.DisplaySkuAvailabilities,
+      source === "xboxpc" ? "Windows.Desktop" : "Windows.Xbox",
+    ),
     cover: secureUrl(cover?.Uri),
     hero: secureUrl(hero?.Uri),
     description: local.ProductDescription ?? local.ShortDescription ?? "",
@@ -260,6 +272,7 @@ function msGame(
 }
 
 const nintendoEntry = z.object({
+  nsuid_txt: z.array(z.string().regex(/^\d{14}$/)).optional(),
   fs_id: z.string().regex(/^\d+$/),
   title: z.string(),
   url: z.string().startsWith("/en-gb/"),
@@ -289,6 +302,10 @@ function nintendoGame(g: z.infer<typeof nintendoEntry>, time: string) {
   };
 }
 const epicEntry = z.object({
+  namespace: z
+    .string()
+    .regex(/^[a-zA-Z0-9_]+$/)
+    .optional(),
   id: z.string().regex(/^[a-zA-Z0-9_-]+$/),
   title: z.string(),
   description: z.string().nullish(),
@@ -317,7 +334,11 @@ const epicEntry = z.object({
     })
     .nullish(),
 });
-function epicGame(g: z.infer<typeof epicEntry>, time: string) {
+function epicGame(
+  g: z.infer<typeof epicEntry>,
+  time: string,
+  offerScope: "catalogue" | "promotions" = "promotions",
+) {
   const cover =
     g.keyImages.find((x) => x.type === "OfferImageTall") ??
     g.keyImages.find((x) => x.type === "Thumbnail");
@@ -335,7 +356,15 @@ function epicGame(g: z.infer<typeof epicEntry>, time: string) {
     g.catalogNs?.mappings?.find((x) => x.pageType === "productHome")
       ?.pageSlug ?? g.productSlug;
   return {
-    ...base("epic", g.id, g.title, time),
+    ...base(
+      "epic",
+      offerScope === "catalogue" && g.namespace
+        ? g.namespace + "--" + g.id
+        : g.id,
+      g.title,
+      time,
+    ),
+    offerScope,
     cover: secureUrl(cover?.url),
     hero: secureUrl(hero?.url),
     description: g.description ?? "",
@@ -351,6 +380,28 @@ function epicGame(g: z.infer<typeof epicEntry>, time: string) {
         : "https://store.epicgames.com/en-US/browse?q=" +
           encodeURIComponent(g.title),
   };
+}
+async function hydrateNintendo(
+  docs: z.infer<typeof nintendoEntry>[],
+  time: string,
+) {
+  const games = docs.map((g) => nintendoGame(g, time));
+  const ids = [...new Set(docs.flatMap((g) => g.nsuid_txt?.slice(0, 1) ?? []))];
+  if (!ids.length) return games;
+  try {
+    const response = await request(
+      "https://api.ec.nintendo.com/v1/price?" +
+        new URLSearchParams({ country: "ZA", lang: "en", ids: ids.join(",") }),
+    );
+    const prices = nintendoPrices(response.value);
+    return games.map((game, index) => ({
+      ...game,
+      ...(prices.get(docs[index].nsuid_txt?.[0] ?? "") ?? { price: null }),
+      observedAt: response.observedAt,
+    }));
+  } catch {
+    return games;
+  }
 }
 async function epicFeed() {
   const result = await request(
@@ -370,6 +421,70 @@ async function epicFeed() {
     .map((g) => epicGame(g, result.observedAt));
 }
 
+const epicFields =
+  'id namespace title description offerType effectiveDate productSlug keyImages { type url } catalogNs { mappings { pageSlug pageType } } price(country: "ZA") { totalPrice { discountPrice originalPrice currencyCode currencyInfo { decimals } } }';
+const epicCooldown = new Map<string, number>();
+function epicQuery(query: string) {
+  return request(
+    "https://store.epicgames.com/graphql?" + new URLSearchParams({ query }),
+  );
+}
+async function epicCatalogue(f: StoreFilters) {
+  const key = f.search + "|" + f.sort;
+  if ((epicCooldown.get(key) ?? 0) > Date.now()) return null;
+  try {
+    const start = (f.page - 1) * f.limit;
+    const query =
+      '{ Catalog { searchStore(country: "ZA", locale: "en-US", category: "games/edition/base|bundles/games", start: ' +
+      start +
+      ", count: " +
+      f.limit +
+      ", keywords: " +
+      JSON.stringify(f.search) +
+      ", sortBy: " +
+      JSON.stringify(f.sort === "price" ? "currentPrice" : "releaseDate") +
+      ", sortDir: " +
+      JSON.stringify(f.sort === "price" ? "ASC" : "DESC") +
+      ") { paging { count total } elements { " +
+      epicFields +
+      " } } } }";
+    const r = await epicQuery(query);
+    const data = z
+      .object({
+        data: z.object({
+          Catalog: z.object({
+            searchStore: z.object({
+              elements: z.array(epicEntry),
+              paging: z.object({
+                count: z.number().int().nonnegative(),
+                total: z.number().int().nonnegative(),
+              }),
+            }),
+          }),
+        }),
+      })
+      .parse(r.value).data.Catalog.searchStore;
+    const games = [
+      ...new Map(
+        data.elements
+          .filter((g) => ["BASE_GAME", "BUNDLE"].includes(g.offerType ?? ""))
+          .map((g) => [g.id, epicGame(g, r.observedAt, "catalogue")]),
+      ).values(),
+    ];
+    return output(
+      games,
+      f,
+      data.paging.total,
+      data.paging.count > 0 && start + data.paging.count < data.paging.total,
+      "Epic paginated game catalogue and game bundles for ZA; regional prices where supplied.",
+    );
+  } catch {
+    if (epicCooldown.size >= 150)
+      epicCooldown.delete(epicCooldown.keys().next().value!);
+    epicCooldown.set(key, Date.now() + 300000);
+    return null;
+  }
+}
 export async function publicCatalogue(source: PublicSource, f: StoreFilters) {
   if (source === "gog") {
     const q = new URLSearchParams({
@@ -386,6 +501,7 @@ export async function publicCatalogue(source: PublicSource, f: StoreFilters) {
             ? "desc:releaseDate"
             : "desc:trending",
     });
+    if (f.dealsOnly) q.set("discounted", "eq:true");
     if (f.search) q.set("query", "like:" + f.search);
     const result = await request("https://catalog.gog.com/v1/catalog?" + q);
     const data = z
@@ -427,15 +543,21 @@ export async function publicCatalogue(source: PublicSource, f: StoreFilters) {
       })
       .parse(result.value);
     let products = data.Products;
-    if (f.genre && products.length) {
-      const details = await request(
-        "https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=" +
-          products.map((g) => g.ProductId).join(",") +
-          "&market=ZA&languages=en-za",
-      );
-      products = z
-        .object({ Products: z.array(msEntry) })
-        .parse(details.value).Products;
+    if (products.length) {
+      try {
+        const details = await request(
+          "https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=" +
+            products.map((g) => g.ProductId).join(",") +
+            "&market=ZA&languages=en-za",
+        );
+        const detailed = z
+          .object({ Products: z.array(msEntry) })
+          .parse(details.value).Products;
+        const byId = new Map(detailed.map((g) => [g.ProductId, g]));
+        products = products.map((g) => byId.get(g.ProductId) ?? g);
+      } catch {
+        /* Metadata remains usable if optional pricing details fail. */
+      }
     }
     return output(
       products.map((g) => msGame(g, result.observedAt, source)),
@@ -445,7 +567,7 @@ export async function publicCatalogue(source: PublicSource, f: StoreFilters) {
       (source === "xboxpc"
         ? "Xbox PC ZA catalogue (Windows)."
         : "Xbox Console ZA catalogue.") +
-        " Prices and Metacritic scores unavailable; verify price and platform on the store.",
+        " Public ZA purchase prices where offered; excludes trials and subscription-only offers. Metacritic scores unavailable. Filters apply to loaded pages.",
     );
   }
   if (source === "nintendo") {
@@ -453,7 +575,9 @@ export async function publicCatalogue(source: PublicSource, f: StoreFilters) {
       ? f.search.replace(/[+!(){}\[\]^"~*?:\\/|&-]/g, " ").trim()
       : "*:*";
     const q = new URLSearchParams({
-      fq: "type:GAME",
+      fq: f.dealsOnly
+        ? "type:GAME AND nsuid_txt:[* TO *] AND price_has_discount_b:true"
+        : "type:GAME",
       q: query || "*:*",
       start: String((f.page - 1) * f.limit),
       rows: String(f.limit),
@@ -475,13 +599,17 @@ export async function publicCatalogue(source: PublicSource, f: StoreFilters) {
     if (data.start !== (f.page - 1) * f.limit)
       throw new Error("Nintendo returned an unexpected page");
     return output(
-      data.docs.map((g) => nintendoGame(g, result.observedAt)),
+      await hydrateNintendo(data.docs, result.observedAt),
       f,
       data.numFound,
       f.page * f.limit < data.numFound,
-      "Nintendo UK game catalogue, including legacy systems. ZA prices and Metacritic scores unavailable.",
+      f.dealsOnly
+        ? "UK sale candidates checked against ZA eShop prices; only confirmed ZA discounts are shown. Not an exhaustive ZA sale list."
+        : "Nintendo UK metadata, including legacy systems, with verified ZA eShop prices where a digital product is on sale. No foreign prices or Metacritic scores. Filters apply to loaded pages.",
     );
   }
+  const catalogue = await epicCatalogue(f);
+  if (catalogue) return catalogue;
   const all = (await epicFeed()).filter(
     (g) => !f.search || g.title.toLowerCase().includes(f.search.toLowerCase()),
   );
@@ -497,7 +625,7 @@ export async function publicCatalogue(source: PublicSource, f: StoreFilters) {
     f,
     all.length,
     f.page * f.limit < all.length,
-    "Epic base games in the current promotions feed only; includes upcoming promotions. Verify offer dates on Epic.",
+    "Epic full catalogue is unavailable from this server. Showing the promotions feed only, including upcoming offers; this is not the full list. Open Epic to browse all games.",
   );
 }
 async function optionalRequirements(
@@ -522,8 +650,30 @@ async function loadPublicGame(slug: string): Promise<SteamGame | null> {
   const m = /^(gog|xboxpc|xbox|nintendo|epic)-([a-zA-Z0-9_-]+)$/.exec(slug);
   if (!m) return null;
   const [, source, id] = m;
-  if (source === "epic")
+  if (source === "epic") {
+    if (cached) return cached;
+    const parts = /^([a-zA-Z0-9_]+)--([a-zA-Z0-9_-]+)$/.exec(id);
+    if (parts) {
+      const r = await epicQuery(
+        "{ Catalog { catalogOffer(namespace: " +
+          JSON.stringify(parts[1]) +
+          ", id: " +
+          JSON.stringify(parts[2]) +
+          ', locale: "en-US", country: "ZA") { ' +
+          epicFields +
+          " } } }",
+      );
+      const data = z
+        .object({
+          data: z.object({
+            Catalog: z.object({ catalogOffer: epicEntry.nullable() }),
+          }),
+        })
+        .parse(r.value).data.Catalog.catalogOffer;
+      return data ? epicGame(data, r.observedAt, "catalogue") : null;
+    }
     return (await epicFeed()).find((g) => g.slug === slug) ?? null;
+  }
   if (source === "xbox" || source === "xboxpc") {
     if (!/^[A-Z0-9]{12}$/.test(id)) return null;
     const r = await request(
@@ -559,7 +709,7 @@ async function loadPublicGame(slug: string): Promise<SteamGame | null> {
       .object({ response: z.object({ docs: z.array(nintendoEntry) }) })
       .parse(r.value);
     return data.response.docs[0]
-      ? nintendoGame(data.response.docs[0], r.observedAt)
+      ? (await hydrateNintendo(data.response.docs, r.observedAt))[0]
       : null;
   }
   const r = await request(

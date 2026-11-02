@@ -2,6 +2,7 @@ import axios from "axios";
 import type { Game, GamesResponse } from "../types";
 
 const client = axios.create({
+  timeout: 30000,
   baseURL: import.meta.env.VITE_API_URL ?? "http://localhost:3000/api",
 });
 
@@ -17,11 +18,19 @@ export async function fetchGame(slug: string): Promise<Game> {
   return data.data;
 }
 
-export async function fetchDeals(budget?: number): Promise<{
-  data: Array<Game & { discount: number; sourceType: string }>;
-  meta: { currency: string; sourceType: string; updatedAt: string };
-}> {
-  const { data } = await client.get("/deals", { params: { budget } });
+export async function fetchDeals(
+  budget?: number,
+  source = "all",
+  cursor?: Partial<Record<import("../types").DealSource, number>>,
+): Promise<import("../types").DealsResponse> {
+  const { data } = await client.get("/deals", {
+    params: {
+      budget,
+      source,
+      cursor: cursor ? JSON.stringify(cursor) : undefined,
+      limit: 24,
+    },
+  });
   return data;
 }
 
@@ -33,10 +42,19 @@ export async function fetchPriceHistory(slug: string): Promise<{
   return data;
 }
 
+let sourcesPending: Promise<import("../types").CatalogueSource[]> | undefined;
 export async function fetchSources(): Promise<
   import("../types").CatalogueSource[]
 > {
-  return (await client.get("/sources")).data.data;
+  if (!sourcesPending)
+    sourcesPending = client
+      .get("/sources")
+      .then((r) => r.data.data)
+      .catch((error) => {
+        sourcesPending = undefined;
+        throw error;
+      });
+  return sourcesPending;
 }
 
 export async function fetchSubscriptions(): Promise<{

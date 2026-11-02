@@ -1,0 +1,158 @@
+
+## build
+
+> gamevault@0.1.0 build
+> npm run build --workspace backend && npm run build --workspace frontend
+
+
+> @gamevault/backend@0.1.0 build
+> tsc
+
+
+> @gamevault/frontend@0.1.0 build
+> vue-tsc --noEmit && vite build
+
+vite v6.4.5 building for production...
+transforming...
+✓ 177 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                                                          0.48 kB │ gzip:  0.32 kB
+dist/assets/DealsPage-2FGSppIL.css                                       0.64 kB │ gzip:  0.30 kB
+dist/assets/GameCard-ox-6T4PQ.css                                        0.70 kB │ gzip:  0.39 kB
+dist/assets/SubscriptionsPage-CZDM6DdJ.css                               1.07 kB │ gzip:  0.42 kB
+dist/assets/GameDetailsPage-CyrJ7yyQ.css                                 2.02 kB │ gzip:  0.67 kB
+dist/assets/index-DuhIEGyL.css                                          25.17 kB │ gzip:  6.17 kB
+dist/assets/_plugin-vue_export-helper-DlAUqK2U.js                        0.09 kB │ gzip:  0.10 kB
+dist/assets/compare-DCEmGiiZ.js                                          0.42 kB │ gzip:  0.29 kB
+dist/assets/alerts-Dn5cmy2t.js                                           0.52 kB │ gzip:  0.30 kB
+dist/assets/NotFoundPage-n0ndH9xz.js                                     0.54 kB │ gzip:  0.39 kB
+dist/assets/GameCover.vue_vue_type_script_setup_true_lang-CTOuDJOs.js    0.61 kB │ gzip:  0.39 kB
+dist/assets/api-CHjx-SpQ.js                                              0.85 kB │ gzip:  0.45 kB
+dist/assets/CollectionsPage-CEzwVH0x.js                                  2.06 kB │ gzip:  1.12 kB
+dist/assets/AccountPage-CHR_JYCF.js                                      2.16 kB │ gzip:  1.16 kB
+dist/assets/DashboardPage-CYP39sZa.js                                    2.96 kB │ gzip:  1.18 kB
+dist/assets/platform-CfPATqeM.js                                         3.02 kB │ gzip:  1.36 kB
+dist/assets/PlayNextPage-qS7vPtHz.js                                     3.05 kB │ gzip:  1.38 kB
+dist/assets/PreferencesPage-CsthQraW.js                                  3.37 kB │ gzip:  1.57 kB
+dist/assets/SubscriptionsPage-CqfsEW1k.js                                3.75 kB │ gzip:  1.80 kB
+dist/assets/AdminPage-CTflSoAQ.js                                        3.84 kB │ gzip:  1.68 kB
+dist/assets/ComparePage-DzwNkbSk.js                                      4.13 kB │ gzip:  1.97 kB
+dist/assets/WrappedPage-jg2giSce.js                                      4.67 kB │ gzip:  2.01 kB
+dist/assets/UpcomingPage-jPL4k88T.js                                     6.03 kB │ gzip:  2.67 kB
+dist/assets/DealsPage-CkAvETsL.js                                        6.23 kB │ gzip:  2.76 kB
+dist/assets/LibraryPage-DOzg8FAg.js                                      6.73 kB │ gzip:  2.56 kB
+dist/assets/JournalPage-dy4_6nWm.js                                      6.76 kB │ gzip:  2.80 kB
+dist/assets/CataloguePage-CrOXglnb.js                                    7.78 kB │ gzip:  3.18 kB
+dist/assets/HomePage-ClZhyxXx.js                                        11.24 kB │ gzip:  4.40 kB
+dist/assets/GameCard.vue_vue_type_script_setup_true_lang-9qZ9Jgu1.js    16.54 kB │ gzip:  6.69 kB
+dist/assets/GameDetailsPage-Bu2Om1rD.js                                170.09 kB │ gzip: 60.29 kB
+dist/assets/index-PGaH6dTq.js                                          189.42 kB │ gzip: 71.46 kB
+✓ built in 2.68s
+
+## backend
+
+> @gamevault/backend@0.1.0 test
+> node --import tsx --test tests/*.test.ts
+
+✔ deal filters validate budgets, source names and bounded independent source cursors (15.0041ms)
+✔ multi-store deals retain only real discounts, deduplicate listings and isolate provider failures (8.7622ms)
+✔ pagination advances successful providers, retries failed pages, and skips exhausted providers (2.1478ms)
+✔ Steam deals use the paginated specials search rather than the featured feed (90.1457ms)
+✔ GOG deal discovery requests the provider discounted filter (45.3938ms)
+✔ Steam pagination uses infinite JSON, deduplicates IDs, preserves unknown prices and scores (90.7435ms)
+✔ Steam login redirects to Valve and rejects forged callbacks and exchange codes (112.3558ms)
+✔ verified Steam login issues a one-use exchange code, never a token in the redirect (429.2058ms)
+✔ client pages crossing Steam windows do not repeat or skip games (4.7964ms)
+✔ RAWG uses actual critic scores, unknown prices, console platforms and safe store links (4.7047ms)
+✔ library API requires authentication, isolates accounts, validates input, and preserves imported conflicts (284.1523ms)
+﹣ MySQL account libraries persist, isolate users and retain account journals during concurrent imports (11.6452ms) # SKIP
+✔ GOG paginates with ZAR prices and hydrates details without losing the cover (147.7789ms)
+✔ GOG does not reinterpret other currencies or missing amounts as ZAR (10.7093ms)
+✔ Xbox uses OData pagination, Xbox platform restriction, and keeps subscription prices unknown (35.0388ms)
+✔ Nintendo group filters retain Switch games and exclude foreign regional prices (11.5323ms)
+✔ Epic only includes base-game promotions, preserves minor-unit scale and missing prices (14.8211ms)
+✔ unavailable store and limited feeds expose honest coverage (0.5247ms)
+✔ missing products return not found and malformed storefront data is rejected (5.0002ms)
+✔ Xbox PC uses Windows Desktop paging and remains distinct from the console listing of the same game (3.8874ms)
+✔ Xbox prices exclude subscriptions, trials, foreign currencies, future/expired offers, and incompatible platforms (18.6944ms)
+✔ Nintendo joins exact product IDs, uses active ZA discounts, and rejects foreign, personalized or unavailable quotes (17.5733ms)
+✔ Nintendo hydrates both catalogue and direct game detail prices by primary NSUID (130.2536ms)
+✔ Xbox catalogue hydrates missing SKU data in one batch and keeps search ordering (10.9259ms)
+✔ Epic full catalogue pagination retains paid games beyond promotions and resolves namespaced deep links (22.1669ms)
+✔ Epic blocked full catalogue falls back explicitly and avoids repeating the blocked request on the next page (10.4467ms)
+✔ Steam bundles are sourced from the purchase area, not recommendations (4.6102ms)
+✔ Steam DLC accepts string parent IDs, paginates, and excludes another games add-on (103.6252ms)
+✔ Steam editions expose verified bundles and package options using external store URLs (15.2359ms)
+✔ GOG packs resolve DLC through explicit included-game relationships and filter unsafe links (55.2462ms)
+✔ Xbox PC add-ons preserve platform requests and show incomplete feeds as a preview (5.7467ms)
+✔ unsupported storefronts have a fallback state and invalid game IDs are rejected (0.4133ms)
+✔ requirements keep readable lines and entities while removing executable markup (3.2345ms)
+✔ Steam keeps operating systems separate and does not invent missing recommended specs (2.0324ms)
+✔ GOG requirements map their own OS and recommendation tiers without mixing them (2.0519ms)
+✔ Microsoft platform availability alone is not treated as hardware requirements (0.5472ms)
+✔ RAWG only exposes desktop requirements, not console metadata (0.3077ms)
+✔ Steam details include the storefront PC requirements (65.7823ms)
+✔ GOG and Xbox PC details load their native requirements independently of price or cover data (31.2617ms)
+✔ subscription prices use the recurring amount rather than a trial or another plan (3.7489ms)
+✔ foreign currency, annual totals, missing headings, and free trial prices do not become monthly ZAR quotes (1.0541ms)
+✔ subscription provider failures are isolated, references are dated, and concurrent loads share requests (44.4132ms)
+✔ workspace validates exact dates, duplicate identifiers and private record ownership fields (6.1107ms)
+✔ workspace API isolates users, requires authentication and rejects stale saves (99.4394ms)
+﹣ MySQL private workspaces persist and allow only one concurrent versioned save (0.5603ms) # SKIP
+ℹ tests 45
+ℹ suites 0
+ℹ pass 43
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 2
+ℹ todo 0
+ℹ duration_ms 2064.9556
+
+## frontend
+
+> @gamevault/frontend@0.1.0 test
+> node --import tsx --test tests/*.test.ts
+
+✔ collection deduplicates games, persists journal values, and computes real statistics (5.0001ms)
+✔ corrupt device storage is reported and not overwritten on load (0.3686ms)
+✔ release years support storefront human-readable and ISO dates (0.1772ms)
+✔ account saves are isolated from device storage, imports keep account values, and logout restores device entries (5.6459ms)
+✔ late account responses cannot leak into another session and failed saves remain unsaved (6.566ms)
+✔ stored sign-in tokens block device edits until identity is verified (0.6304ms)
+✔ recommendations exclude owned games, prevent duplicates, explain signals and respect preferred platforms (1.0609ms)
+✔ picker remains inside filtered input, handles empty input and avoids immediate repetition (0.1729ms)
+✔ release dates distinguish exact days from quarter, year-only and unknown announcements (1.7552ms)
+✔ annual analytics use explicit dates and sessions, never lifetime library hours (0.4689ms)
+✔ private workspace protects guest data and rejects uncertain account saves (8.9528ms)
+✔ late private workspace reads cannot leak into a signed-out session (1.7133ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 570.8759
+
+## MySQL
+✔ MySQL account libraries persist, isolate users and retain account journals during concurrent imports (261.1619ms)
+✔ MySQL private workspaces persist and allow only one concurrent versioned save (100.8439ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 731.7947
+
+## Final verification additions
+Backend suite after production-configuration guard: 44 passed, 2 opt-in database tests skipped.
+Frontend suite: 12 passed. Both opt-in MySQL tests executed separately: 2 passed.
+Final production build: passed. Final Edge browser suite: passed, including 15 routes at 1440/1024/768/390/320, private review CRUD, safe text rendering and PNG generation.
+Full repository npm audit: zero reported vulnerabilities.
+Running API: health 200, unauthenticated private workspace 401, live upcoming feed 200 with supplied Steam announcements.
+
+## Indexed journal follow-up
+Backend: 46 passed, 3 database tests skipped by default. Frontend: 15 passed. All 3 optional MySQL tests executed and passed, including 2,104 entries and migration/search/conflict checks. Browser suite passed normalized import/CRUD, 53-entry pagination/search and lost-response retry without duplication. Additive journal and private-search migrations applied locally.

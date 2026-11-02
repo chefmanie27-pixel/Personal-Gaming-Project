@@ -1,0 +1,1 @@
+<template><div class="page-container empty-state"><h1>Page not found</h1><p>This route is unavailable. Your library remains saved.</p><RouterLink class="button primary" to="/">Return home</RouterLink></div></template>

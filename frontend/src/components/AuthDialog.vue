@@ -1,8 +1,40 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, onMounted, onBeforeUnmount } from "vue";
 import { useAuthStore } from "../stores/auth";
 
-defineEmits<{ close: [] }>();
+const emit = defineEmits<{ close: [] }>();
+const dialog = ref<HTMLElement>();
+let previousFocus: HTMLElement | null = null;
+function handleKey(event: KeyboardEvent) {
+  if (event.key === "Escape") {
+    emit("close");
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const items = [
+    ...(dialog.value?.querySelectorAll<HTMLElement>(
+      "button:not(:disabled),a[href],input:not(:disabled)",
+    ) ?? []),
+  ];
+  const first = items[0];
+  const last = items[items.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last?.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first?.focus();
+  }
+}
+onMounted(() => {
+  previousFocus = document.activeElement as HTMLElement;
+  dialog.value?.querySelector<HTMLElement>("button")?.focus();
+  document.addEventListener("keydown", handleKey);
+});
+onBeforeUnmount(() => {
+  document.removeEventListener("keydown", handleKey);
+  previousFocus?.focus();
+});
 const auth = useAuthStore();
 const steamLogin =
   (import.meta.env.VITE_API_URL ?? "http://localhost:3000/api") + "/auth/steam";
@@ -16,7 +48,7 @@ const submit = async () => {
     mode.value === "login"
       ? await auth.login(email.value, password.value)
       : await auth.register(email.value, password.value);
-    (document.querySelector("[data-close-auth]") as HTMLButtonElement)?.click();
+    emit("close");
   } catch {
     /* message is rendered below */
   } finally {
@@ -27,7 +59,13 @@ const submit = async () => {
 
 <template>
   <div class="dialog-backdrop" @click.self="$emit('close')">
-    <section class="auth-dialog">
+    <section
+      ref="dialog"
+      class="auth-dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="auth-title"
+    >
       <button
         data-close-auth
         class="dialog-close"
@@ -39,7 +77,7 @@ const submit = async () => {
       <p class="section-kicker">
         {{ mode === "login" ? "WELCOME BACK" : "JOIN THE VAULT" }}
       </p>
-      <h2>
+      <h2 id="auth-title">
         {{ mode === "login" ? "Sign in to GameVault" : "Create your account" }}
       </h2>
       <p class="muted">Save games and track the prices that matter to you.</p>

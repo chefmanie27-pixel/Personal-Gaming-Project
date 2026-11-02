@@ -151,6 +151,17 @@ test("Steam details include the storefront PC requirements", async () => {
           data: {
             type: "game",
             name: "Spec fixture",
+            screenshots: [
+              { path_full: "https://example.com/screenshot.jpg" },
+              { path_full: "javascript:alert(1)" },
+            ],
+            movies: [
+              {
+                name: "Trailer",
+                mp4: { max: "https://example.com/trailer.mp4" },
+              },
+              { mp4: { max: "javascript:alert(1)" } },
+            ],
             is_free: false,
             header_image: "https://example.com/cover.jpg",
             pc_requirements: {
@@ -163,6 +174,9 @@ test("Steam details include the storefront PC requirements", async () => {
     );
   try {
     const game = await steamGame("steam-501001", false);
+    assert.deepEqual(game?.screenshots, ["https://example.com/screenshot.jpg"]);
+    assert.equal(game?.trailers?.length, 1);
+    assert.equal(game?.trailers?.[0].url, "https://example.com/trailer.mp4");
     assert.equal(game?.systemRequirements?.[0].minimum, "Memory: 8 GB");
     assert.equal(game?.systemRequirements?.[0].recommended, "Memory: 16 GB");
   } finally {

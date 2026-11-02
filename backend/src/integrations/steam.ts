@@ -8,6 +8,8 @@ export interface SteamGame {
   cover: string;
   coverFallback?: string;
   hero: string;
+  screenshots?: string[];
+  trailers?: { name: string; url: string; poster?: string }[];
   systemRequirements?: SystemRequirements[];
   genres: string[];
   platforms: string[];
@@ -20,6 +22,7 @@ export interface SteamGame {
   originalPrice?: number;
   store: string;
   storefronts?: string[];
+  offerScope?: "catalogue" | "promotions";
   storeUrl: string;
   featured: boolean;
   status: "released" | "upcoming";
@@ -37,6 +40,12 @@ interface Item {
   price?: { final: number; initial: number; currency: string };
 }
 interface Detail {
+  screenshots?: { path_full?: string }[];
+  movies?: {
+    name?: string;
+    thumbnail?: string;
+    mp4?: { max?: string; 480?: string };
+  }[];
   pc_requirements?: unknown;
   mac_requirements?: unknown;
   linux_requirements?: unknown;
@@ -203,6 +212,33 @@ export async function steamGame(
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">");
   game.tagline = game.description;
+  const safeMedia = (value: unknown): value is string => {
+    if (typeof value !== "string") return false;
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" && !url.username && !url.password;
+    } catch {
+      return false;
+    }
+  };
+  game.screenshots = (d.screenshots ?? [])
+    .map((image) => image.path_full)
+    .filter(safeMedia)
+    .slice(0, 20);
+  game.trailers = (d.movies ?? [])
+    .flatMap((movie) => {
+      const url = movie.mp4?.max ?? movie.mp4?.[480];
+      return safeMedia(url)
+        ? [
+            {
+              name: movie.name || "Official trailer",
+              url,
+              poster: safeMedia(movie.thumbnail) ? movie.thumbnail : undefined,
+            },
+          ]
+        : [];
+    })
+    .slice(0, 3);
   game.systemRequirements = steamRequirements(d);
   game.hero = d.background || d.header_image;
   game.cover = d.header_image;
@@ -271,6 +307,8 @@ export async function steamPage(
   page: number,
   limit: number,
   sort: string,
+  specials = false,
+  comingSoon = false,
 ) {
   // Steam supports 50-item windows. Translate client pages to aligned provider windows.
   const offset = (page - 1) * limit;
@@ -296,6 +334,11 @@ export async function steamPage(
           } as Record<string, string>
         )[sort] ?? "_ASC",
     });
+    if (specials) query.set("specials", "1");
+    if (comingSoon) {
+      query.set("filter", "comingsoon");
+      query.set("sort_by", "Released_ASC");
+    }
     const result = await request<{
       results_html: string;
       total_count: number;

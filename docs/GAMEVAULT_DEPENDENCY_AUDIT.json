@@ -1,0 +1,83 @@
+{
+  "baseline": {
+    "counts": {
+      "info": 0,
+      "low": 0,
+      "moderate": 3,
+      "high": 4,
+      "critical": 0,
+      "total": 7
+    },
+    "packages": [
+      {
+        "name": "@prisma/config",
+        "severity": "high",
+        "isDirect": false,
+        "fixAvailable": true
+      },
+      {
+        "name": "@vue/language-core",
+        "severity": "moderate",
+        "isDirect": false,
+        "fixAvailable": {
+          "name": "vue-tsc",
+          "version": "3.3.14",
+          "isSemVerMajor": true
+        }
+      },
+      {
+        "name": "deepmerge-ts",
+        "severity": "high",
+        "isDirect": false,
+        "fixAvailable": true
+      },
+      {
+        "name": "minimatch",
+        "severity": "moderate",
+        "isDirect": false,
+        "fixAvailable": {
+          "name": "vue-tsc",
+          "version": "3.3.14",
+          "isSemVerMajor": true
+        }
+      },
+      {
+        "name": "prisma",
+        "severity": "high",
+        "isDirect": true,
+        "fixAvailable": true
+      },
+      {
+        "name": "vue-tsc",
+        "severity": "moderate",
+        "isDirect": true,
+        "fixAvailable": {
+          "name": "vue-tsc",
+          "version": "3.3.14",
+          "isSemVerMajor": true
+        }
+      },
+      {
+        "name": "zod",
+        "severity": "high",
+        "isDirect": true,
+        "fixAvailable": {
+          "name": "zod",
+          "version": "4.6.7",
+          "isSemVerMajor": true
+        }
+      }
+    ]
+  },
+  "final": {
+    "counts": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 0,
+      "critical": 0,
+      "total": 0
+    },
+    "packages": []
+  }
+}

@@ -34,6 +34,8 @@ test("GOG paginates with ZAR prices and hydrates details without losing the cove
               title: "Fixture " + page,
               productType: "game",
               coverVertical: "https://images.gog-statics.com/large.jpg",
+              galaxyBackgroundImage: null,
+              coverHorizontal: null,
               storeLink: "https://www.gog.com/en/game/fixture",
               price: {
                 finalMoney: { amount: "45.50", currency: "ZAR" },
@@ -284,8 +286,11 @@ test("Epic only includes base-game promotions, preserves minor-unit scale and mi
 test("unavailable store and limited feeds expose honest coverage", () => {
   const sources = catalogueSources();
   assert.equal(sources.find((s) => s.id === "playstation")?.available, false);
-  assert.equal(sources.find((s) => s.id === "epic")?.coverage, "promotions");
-  assert.equal(sources.find((s) => s.id === "nintendo")?.prices, false);
+  assert.equal(
+    sources.find((s) => s.id === "epic")?.coverage,
+    "catalogue-with-fallback",
+  );
+  assert.equal(sources.find((s) => s.id === "nintendo")?.prices, true);
 });
 
 test("missing products return not found and malformed storefront data is rejected", async () => {

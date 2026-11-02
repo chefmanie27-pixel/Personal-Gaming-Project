@@ -1,0 +1,3 @@
+ALTER TABLE `JournalRecord` ADD COLUMN `searchText` TEXT NULL;
+UPDATE `JournalRecord` SET `searchText` = CONCAT_WS(' ', DATE_FORMAT(`entryDate`, '%Y-%m-%d'), `title`, `notes`, `progress`, JSON_UNQUOTE(JSON_EXTRACT(`tags`, '$[0]')), JSON_UNQUOTE(JSON_EXTRACT(`tags`, '$[1]')), JSON_UNQUOTE(JSON_EXTRACT(`tags`, '$[2]')), JSON_UNQUOTE(JSON_EXTRACT(`tags`, '$[3]')), JSON_UNQUOTE(JSON_EXTRACT(`tags`, '$[4]')), JSON_UNQUOTE(JSON_EXTRACT(`tags`, '$[5]')), JSON_UNQUOTE(JSON_EXTRACT(`tags`, '$[6]')), JSON_UNQUOTE(JSON_EXTRACT(`tags`, '$[7]')), JSON_UNQUOTE(JSON_EXTRACT(`tags`, '$[8]')), JSON_UNQUOTE(JSON_EXTRACT(`tags`, '$[9]')));
+ALTER TABLE `JournalRecord` MODIFY COLUMN `searchText` TEXT NOT NULL;

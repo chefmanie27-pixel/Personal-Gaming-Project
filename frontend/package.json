@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
-    "typecheck": "vue-tsc --noEmit"
+    "typecheck": "vue-tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "test:ui": "node scripts/ui-smoke.cjs"
   },
   "dependencies": {
     "axios": "^1.8.4",
@@ -22,6 +24,6 @@
     "tailwindcss": "^4.0.12",
     "typescript": "^5.8.2",
     "vite": "^6.2.2",
-    "vue-tsc": "^2.2.8"
+    "vue-tsc": "^3.3.14"
   }
 }

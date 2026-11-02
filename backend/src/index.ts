@@ -1,4 +1,12 @@
 import "dotenv/config";
+import { createJournalRouter } from "./journal.js";
+import { databaseJournal } from "./journalRepository.js";
+import { createWorkspaceRouter } from "./workspace.js";
+import { databaseWorkspace } from "./workspaceRepository.js";
+import { authRateLimit } from "./rateLimit.js";
+import { dealsQuerySchema, getDeals } from "./deals.js";
+import { createLibraryRouter } from "./library.js";
+import { databaseLibrary } from "./libraryRepository.js";
 import { rawgCatalogue, rawgDetail } from "./integrations/storefronts.js";
 import { publicCatalogue, publicGame } from "./integrations/publicStores.js";
 import { catalogueSources } from "./integrations/sources.js";
@@ -9,7 +17,7 @@ import cors from "cors";
 import express from "express";
 import { z } from "zod";
 import { games } from "./data/games.js";
-import { steamCatalogue, steamGame, steamPage } from "./integrations/steam.js";
+import { steamGame, steamPage } from "./integrations/steam.js";
 import { config } from "./config.js";
 import { prisma } from "./db.js";
 import {
@@ -26,13 +34,66 @@ import { startScheduler } from "./jobs/scheduler.js";
 const app = express();
 const port = config.PORT;
 app.use(cors({ origin: config.FRONTEND_ORIGIN }));
+app.use(
+  "/api/library",
+  express.json({ limit: "5mb" }),
+  createLibraryRouter(databaseLibrary),
+);
+app.use(
+  "/api/workspace",
+  express.json({ limit: "5mb" }),
+  createWorkspaceRouter(databaseWorkspace),
+);
+app.use(
+  "/api/journal",
+  express.json({ limit: "5mb" }),
+  createJournalRouter(databaseJournal),
+);
 app.use(express.json());
+app.post(
+  ["/api/auth/login", "/api/auth/register", "/api/auth/steam/exchange"],
+  authRateLimit(),
+);
 app.use("/api/auth", steamAuth);
 
 app.get("/api/health", (_req, res) =>
   res.json({ status: "ok", service: "gamevault-api" }),
 );
 
+app.get("/api/upcoming", async (req, res) => {
+  const query = z
+    .object({
+      page: z.coerce.number().int().min(1).max(10000).default(1),
+      limit: z.coerce.number().int().min(1).max(24).default(24),
+    })
+    .safeParse(req.query);
+  if (!query.success)
+    return res.status(400).json({ error: "Invalid upcoming page." });
+  try {
+    const result = await steamPage(
+      "",
+      query.data.page,
+      query.data.limit,
+      "newest",
+      false,
+      true,
+    );
+    return res.json({
+      data: result.data.filter(
+        (g) =>
+          g.status === "upcoming" || Date.parse(g.releaseDate) > Date.now(),
+      ),
+      meta: {
+        hasMore: result.hasMore,
+        page: query.data.page,
+        scope:
+          "Steam coming-soon catalogue. Dates are publisher announcements and may change.",
+      },
+    });
+  } catch {
+    return res.status(502).json({ error: "Upcoming releases could not load." });
+  }
+});
 app.get("/api/sources", (_req, res) => res.json({ data: catalogueSources() }));
 
 app.get("/api/subscriptions", async (_req, res, next) => {
@@ -168,39 +229,17 @@ app.get("/api/games/:slug", async (req, res) => {
   }
 });
 app.get("/api/deals", async (req, res) => {
-  const budget = z.coerce
-    .number()
-    .positive()
-    .optional()
-    .safeParse(req.query.budget);
-  if (!budget.success)
-    return res.status(400).json({ error: "Budget must be positive" });
+  const query = dealsQuerySchema.safeParse(req.query);
+  if (!query.success)
+    return res
+      .status(400)
+      .json({ error: "Invalid deals filters or pagination." });
   try {
-    const catalogue = await steamCatalogue();
-    const deals = catalogue
-      .filter(
-        (g) =>
-          g.price !== null &&
-          g.originalPrice &&
-          (budget.data === undefined || g.price <= budget.data),
-      )
-      .map((g) => ({
-        ...g,
-        discount: Math.round((1 - g.price! / g.originalPrice!) * 100),
-      }))
-      .sort((a, b) => b.discount - a.discount);
-    return res.json({
-      data: deals,
-      meta: {
-        sourceType: "steam",
-        currency: "ZAR",
-        updatedAt: catalogue[0]?.observedAt,
-      },
-    });
+    return res.json(await getDeals(query.data));
   } catch {
     return res
       .status(502)
-      .json({ error: "Steam is unavailable. Please try again shortly." });
+      .json({ error: "Deals are unavailable. Please retry." });
   }
 });
 app.get("/api/games/:slug/price-history", async (req, res) => {
@@ -612,7 +651,22 @@ app.use(
     res: express.Response,
     _next: express.NextFunction,
   ) => {
-    console.error(error);
+    if (
+      error &&
+      typeof error === "object" &&
+      "status" in error &&
+      (error.status === 400 || error.status === 413)
+    )
+      return res.status(error.status).json({
+        error:
+          error.status === 413
+            ? "Request is too large."
+            : "Invalid JSON request.",
+      });
+    console.error(
+      "API request failed:",
+      error instanceof Error ? error.name : "Unknown error",
+    );
     return res
       .status(500)
       .json({ error: "An unexpected server error occurred" });

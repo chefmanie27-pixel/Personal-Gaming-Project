@@ -62,7 +62,7 @@ npm run build
 
 The catalogue loads real games from Steam Store endpoints. Authentication and wishlist persistence are now database-backed once MySQL is configured. Required secrets use environment variables and documented `.env.example` files; no API keys are committed.
 
-The Deals page is available at `/deals`, and game details include a Chart.js price-history view. Deals use Steam regional prices. Price history remains empty until genuine observations have been stored. Stored `RegionalPrice` observations automatically take precedence when available.
+The Deals page is available at `/deals`, and game details include a Chart.js price-history view. Deals combine verified ZAR discounts from Steam, GOG, Xbox Console/PC, Nintendo and Epic. Price history remains empty until genuine observations have been stored. Stored `RegionalPrice` observations automatically take precedence when available.
 
 Administrators can use `/admin` to inspect database counts and synchronization logs. The default mock synchronization is safe for development; RAWG, IGDB, and Steam jobs intentionally return a configuration error until credentials, terms, and adapters are enabled.
 
@@ -132,3 +132,57 @@ Verification includes 23 backend regression tests, a successful production build
 Game details include an expandable Editions & DLC panel, loaded only when opened. GET /api/games/:slug/related accepts kind=editions or kind=dlc, page, and a bounded limit. Steam lists official purchase options, bundles from its purchase area, and linked DLC; GOG lists explicit editions and DLC, including DLC reached through a pack's included base-game relationships. Xbox/Xbox PC show the public add-on preview when supplied. Other storefronts and unsupported edition feeds link to the game's official store page.
 
 Related products open their actual storefront pages, including DLC that cannot be opened as a base game in GameVault. Lists use provider IDs rather than title guesses. Partial feeds are labelled, DLC pages can load more results, and source failures have their own retry control. No related-product database migration is required for this live view.
+
+
+## Discovery redesign and personal collection
+
+The Vue frontend now uses a shared dark palette, responsive navigation, searchable local history, keyboard-accessible sign-in, featured-game selection, scrollable discovery rows, genre links, and storefront badges. Route components are loaded on demand. External Google font CSS is no longer required to render the application; system fonts provide the fallback. Discovery sections use available source data and omit empty categories rather than inventing ratings or release information.
+
+Game cards add games to the signed-in account collection, or to a device collection for guests, and toggle favorites. The game journal records one of five playing statuses, a 0-10 personal rating, nonnegative playtime hours, and notes. My Library supports search, status filtering, sorting and grid/list views; Favorites and Dashboard read the same stored collection. Removal requires an inline confirmation. Statistics and genre counts are computed from actual saved entries.
+
+**Persistence scope:** signed-in collections and journals are saved in MySQL through authenticated /api/library endpoints. Guest collections remain in browser localStorage under gamevault_library_v1. Signing in loads only that user's account entries; signing out restores the separate device collection. A stored sign-in token blocks device editing while identity is being verified. Device entries are never uploaded automatically. My Library offers an explicit import that retains existing account entries and keeps the device backup. Import batches are transactional and limited to 25 entries. Failed account reads or uncertain saves block further account edits until reload. Existing account wishlists, Steam authentication and price alerts remain separate features.
+
+Catalogue year, minimum score, developer and alphabetical filters explicitly operate on loaded results; existing source-supported search, sort, genre and platform filters continue through the backend. Steam details include only supplied HTTPS screenshots and MP4 trailers, with lazy images and no video autoplay. Other providers omit unavailable media. Genre links offer related exploration without inventing a similarity score.
+
+Run npm run build, npm test --workspace backend, and npm test --workspace frontend. There is no configured lint command. Run npm run test:ui --workspace frontend for the isolated Edge browser smoke suite (Windows default Edge path, or configure EDGE_PATH). It uses deterministic HTTP fixtures and a temporary browser profile, never real accounts. It checks collection persistence and journal statistics, favorite/removal flows, search empty/error/retry states, mobile navigation, sign-in Escape/focus behavior, and seven public routes at 1440, 1024, 768, 390 and 320 pixels. Backend tests validate source mappings independently; this browser suite does not verify live provider uptime or database account synchronization.
+
+
+## Account library database migration
+
+Migration 20261102090000_account_library adds LibraryEntry with a user relation, a unique user/slug key, validated game JSON, playing status, favorite, rating, hours, notes and timestamps. It does not modify existing games, users, wishlists or alerts. The snapshot lets games from any supported live storefront be saved without first populating the canonical Game table. All reads, updates and deletes are scoped to the verified token's user ID; client-supplied ownership is rejected. PUT adds without overwriting an existing journal; PATCH updates validated journal fields; POST /api/library/import preserves existing account entries.
+
+For another environment, run npm run db:generate --workspace backend, then run npx prisma migrate deploy from backend before starting the updated server. The migration has been applied to this workspace's configured local database. Stop/reload the backend before Prisma generation on Windows if its engine DLL is locked.
+
+Run the optional real MySQL smoke test from backend with GAMEVAULT_DATABASE_TESTS=1 and node --import tsx --test tests/libraryDatabase.test.ts. It creates isolated temporary accounts, checks persistence and ownership boundaries, and removes those accounts afterward. Normal backend tests do not require a database. The browser fixture suite also checks sign-in, explicit import, journal save, refresh and sign-out back to the original device data; it does not contact a real Steam account.
+
+
+## GOG recovery and regional storefront game prices
+
+GOG's optional catalogue artwork may be null (including galaxyBackgroundImage). These fields are nullable so one game's missing background cannot reject an entire page. The regression fixture includes this live-observed case; live pages 1 and 2 returned 24 games each after the fix.
+
+Xbox Console and Xbox PC hydrate SKU availability in a batched ZA product request, matched by product ID while retaining search order. Prices use public full-game Purchase offers in ZAR for the requested device platform. Trials, subscriptions, redemption/license-only offers, remediation/member-only offers, other currencies, and inactive date ranges are excluded. Nintendo catalogue NSUIDs are matched to the official country=ZA price endpoint; UK metadata prices are ignored. Active ZA discounts are shown against their regular ZA price. Legacy, unavailable and unmatched products retain unknown prices. Nintendo and Xbox price sorting operates on each loaded page, not a global storefront price order. Optional price lookup failures leave metadata usable.
+
+Epic now attempts a paginated ZA base-game/bundle catalogue query rather than treating the promotional feed as complete. Full-catalogue results preserve namespace and offer ID for direct detail lookup. If the catalogue request is blocked, rate-limited, or invalid, a five-minute per-query cooldown prevents repeated failed requests and the UI explicitly labels the limited promotions fallback. At verification time Epic returned HTTP 403 security challenges, so the live full catalogue could not be verified or delivered from this server; only pagination fixtures passed. Existing promotion-only game IDs are preserved for saved collections. No access challenge bypass or invented catalogue entries are used.
+
+Verification for this change includes backend regressions, production compilation and direct live reads of GOG pages, Xbox Console/PC purchase quotes, Nintendo ZA regular/discount prices, and Epic's fallback coverage.
+
+
+## Paginated multi-store deals
+
+GET /api/deals accepts source (all by default, or steam/gog/xbox/xboxpc/nintendo/epic), an optional positive budget, limit (1-50 per source, default 24), and an optional JSON cursor. Use the returned meta.nextCursor on subsequent requests; zero marks an exhausted source. Successful sources advance independently while failed sources retain their page for retry. Partial failures return the other stores' results and explicit per-source errors. Deals are deduplicated by source/platform listing slug and require finite ZAR prices with originalPrice greater than price. Upcoming games and missing prices are excluded. There is no fabricated global deal count.
+
+Steam now pages its specials search instead of the small featured feed. GOG uses its discounted catalogue filter. Xbox Console and PC check catalogue pages for public purchase discounts. Nintendo uses UK digital-sale candidates for discovery, but validates every displayed discount against ZA eShop pricing; this is not an exhaustive list of ZA-only sales. Epic uses its catalogue when accessible and clearly labels the limited promotions fallback otherwise. Source availability and coverage remain visible in the Deals page.
+
+The page defaults to all supported stores, appends further results through Load more deals, and offers storefront, custom budget, and loaded-result discount/price ordering controls. Budget and storefront changes reset pagination, failed pages can be retried, and one unavailable source does not remove the other stores' deals. Browser tests cover deal pagination, storefront switching and a decimal custom budget in addition to representative screen widths.
+
+
+## Platform evolution
+
+The app now includes private collections, advanced backlog metadata, dated journals/reviews, personalized recommendations, comparison, upcoming releases/watchlists, a filtered library picker, profile preferences and annual Gaming Wrapped with an opt-in local PNG. Use the Play & track menu to reach the new pages. Account workspace data is stored in MySQL with version checks; guest data remains separate and can be explicitly imported.
+
+See [implementation plan](docs/GAMEVAULT_IMPLEMENTATION_PLAN.md), [progress by phase](docs/GAMEVAULT_PROGRESS.md), [architecture and setup](docs/GAMEVAULT_ARCHITECTURE.md), and [executed test report](docs/GAMEVAULT_TEST_REPORT.md). Migration 20261102120000_platform_workspace is applied locally. Run npm ci and regenerate Prisma when setting up another checkout; then run prisma migrate deploy from backend. Dependency security fixes are recorded in the lockfile and audit report.
+
+
+## Indexed account journals
+
+Account journals now use an indexed JournalRecord table with paginated reads and independent edit revisions. Existing JSON entries migrate transactionally on the next account load. This removes the old workspace-wide history limit for authenticated users, preserves device-only journals/import, and calculates annual summaries without sending private notes to the browser. The new migration is applied locally; refresh the app to load the new client. See [journal storage and rollout](docs/GAMEVAULT_JOURNAL_STORAGE.md).

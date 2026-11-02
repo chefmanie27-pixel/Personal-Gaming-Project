@@ -4,6 +4,7 @@ import { useRoute } from "vue-router";
 import GameCard from "../components/GameCard.vue";
 import { fetchGames, fetchSources } from "../services/api";
 import type { Game, CatalogueSource } from "../types";
+import { releaseYear } from "../utils/dates";
 import axios from "axios";
 const route = useRoute();
 const games = ref<Game[]>([]);
@@ -17,7 +18,26 @@ const search = ref(
   typeof route.query.search === "string" ? route.query.search : "",
 );
 const sort = ref("featured");
-const genre = ref("");
+const genre = ref(
+  typeof route.query.genre === "string" ? route.query.genre : "",
+);
+const minScore = ref("");
+const year = ref("");
+const developer = ref("");
+const localSort = ref("");
+const visibleGames = computed(() => {
+  const result = games.value.filter(
+    (g) =>
+      (!year.value || releaseYear(g.releaseDate) === year.value) &&
+      (!developer.value ||
+        g.developer.toLowerCase().includes(developer.value.toLowerCase())) &&
+      (!minScore.value ||
+        (g.score !== null && g.score >= Number(minScore.value))),
+  );
+  return localSort.value === "title"
+    ? result.sort((a, b) => a.title.localeCompare(b.title))
+    : result;
+});
 const source = ref("steam");
 const sources = ref<CatalogueSource[]>([]);
 const selectedSource = computed(() =>
@@ -155,6 +175,37 @@ onBeforeUnmount(() => {
       {{ sourceError }}
       <button class="button ghost" @click="loadSources">Retry</button>
     </p>
+    <details class="storefront-details">
+      <summary>Advanced filters on loaded results</summary>
+      <div class="filters">
+        <label
+          >Release year<input
+            v-model="year"
+            type="number"
+            min="1970"
+            max="2100"
+            placeholder="Any year" /></label
+        ><label
+          >Minimum critic score<input
+            v-model="minScore"
+            type="number"
+            min="0"
+            max="100"
+            placeholder="Any score" /></label
+        ><label
+          >Developer<input
+            v-model="developer"
+            placeholder="Any developer" /></label
+        ><select v-model="localSort" aria-label="Order loaded results">
+          <option value="">Storefront order</option>
+          <option value="title">Alphabetical</option>
+        </select>
+      </div>
+      <p class="muted">
+        These filters apply to loaded games only. Load more pages to expand the
+        results.
+      </p>
+    </details>
     <div class="filters">
       <label class="filter-search"
         ><input
@@ -196,10 +247,29 @@ onBeforeUnmount(() => {
           Recently released
         </option>
         <option v-if="selectedSource?.prices !== false" value="price">
-          Lowest price
+          {{
+            ["xbox", "xboxpc", "nintendo"].includes(source)
+              ? "Lowest price (loaded page)"
+              : "Lowest price"
+          }}
         </option>
       </select>
     </div>
+    <button
+      class="button ghost"
+      @click="
+        search = '';
+        genre = '';
+        platform = '';
+        sort = 'featured';
+        year = '';
+        minScore = '';
+        developer = '';
+        localSort = '';
+      "
+    >
+      Reset filters
+    </button>
     <p v-if="source === 'rawg'" class="muted">
       Game data supplied by
       <a href="https://rawg.io" target="_blank" rel="noopener noreferrer"
@@ -211,11 +281,18 @@ onBeforeUnmount(() => {
       ><span>{{ scope }}</span>
     </div>
     <div class="card-grid">
-      <GameCard v-for="game in games" :key="game.id" :game="game" />
+      <GameCard v-for="game in visibleGames" :key="game.id" :game="game" />
     </div>
     <p v-if="error" role="alert">{{ error }}</p>
-    <p v-if="loading" role="status">Loading games...</p>
-    <p v-else-if="!games.length && !error">
+    <div
+      v-if="loading"
+      class="card-grid"
+      aria-busy="true"
+      aria-label="Loading games"
+    >
+      <div v-for="i in 4" :key="i" class="skeleton-card"></div>
+    </div>
+    <p v-else-if="!visibleGames.length && !error">
       No matches on the loaded pages. Load more or change your filters.
     </p>
     <div ref="sentinel" class="load-more">

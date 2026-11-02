@@ -3,7 +3,8 @@ import { ref } from "vue";
 import axios from "axios";
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL ?? "http://localhost:3000/api",
+  timeout: 20000,
+  baseURL: import.meta.env?.VITE_API_URL ?? "http://localhost:3000/api",
 });
 interface User {
   id: string;
@@ -50,6 +51,7 @@ export const useAuthStore = defineStore("auth", () => {
     }
   }
   async function restore() {
+    error.value = "";
     const fragment = new URLSearchParams(location.hash.slice(1));
     if (fragment.has("steam_error")) {
       error.value = "Steam sign-in failed. Please retry.";
@@ -76,6 +78,9 @@ export const useAuthStore = defineStore("auth", () => {
       } catch (reason) {
         if (axios.isAxiosError(reason) && reason.response?.status === 401)
           logout();
+        else
+          error.value =
+            "Unable to verify your sign-in. Retry the sign-in check or sign out to use the device collection.";
       }
   }
   function logout() {

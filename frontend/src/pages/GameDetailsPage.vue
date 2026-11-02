@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import GameMedia from "../components/GameMedia.vue";
+import LibraryControls from "../components/LibraryControls.vue";
 import RelatedContent from "../components/RelatedContent.vue";
 import SystemRequirements from "../components/SystemRequirements.vue";
 import GameCover from "../components/GameCover.vue";
@@ -30,7 +32,8 @@ const auth = useAuthStore();
 const game = ref<Game>();
 const loading = ref(true);
 const error = ref("");
-onMounted(async () => {
+async function loadGame() {
+  loading.value = true;
   try {
     error.value = "";
     game.value = await fetchGame(String(route.params.slug));
@@ -39,7 +42,8 @@ onMounted(async () => {
   } finally {
     loading.value = false;
   }
-});
+}
+onMounted(loadGame);
 const formatPrice = (value: number | null) =>
   value === null ? "Price unavailable" : `R${value.toFixed(2)}`;
 const wishlistMessage = ref("");
@@ -75,7 +79,9 @@ async function setPriceAlert() {
 </script>
 
 <template>
-  <p v-if="error" role="alert" class="empty-state">{{ error }}</p>
+  <p v-if="error" role="alert" class="empty-state">
+    {{ error }} <button class="button ghost" @click="loadGame">Retry</button>
+  </p>
   <div v-if="loading" class="detail-loading">Loading game...</div>
   <template v-else-if="game">
     <section
@@ -117,8 +123,22 @@ async function setPriceAlert() {
       <div class="detail-main">
         <h2>About the game</h2>
         <p class="description">{{ game.description }}</p>
-        <RelatedContent :game="game" />
-        <SystemRequirements :game="game" />
+        <GameMedia :game="game" /><LibraryControls
+          :game="game"
+        /><RelatedContent :game="game" /> <SystemRequirements :game="game" />
+        <section v-if="game.genres.length" class="section-block">
+          <h2>Keep exploring</h2>
+          <p class="muted">Browse more games in this game's genres.</p>
+          <div class="hero-actions">
+            <RouterLink
+              v-for="genre in game.genres.slice(0, 3)"
+              :key="genre"
+              :to="{ path: '/catalogue', query: { genre } }"
+              class="button ghost"
+              >{{ genre }}</RouterLink
+            >
+          </div>
+        </section>
         <PriceHistoryChart
           v-if="game.slug.startsWith('steam-')"
           :slug="game.slug"
@@ -143,10 +163,15 @@ async function setPriceAlert() {
           {{ game.price === null ? "WHERE TO PLAY" : "STORE PRICE - ZA" }}
         </p>
         <p v-if="game.slug.startsWith('nintendo-')" class="muted">
-          UK catalogue information. Check regional availability and price on
-          Nintendo.
+          UK catalogue metadata with South African eShop prices where available.
+          Legacy or unavailable digital titles may have no purchase offer.
         </p>
-        <p v-if="game.slug.startsWith('epic-')" class="muted">
+        <p
+          v-if="
+            game.slug.startsWith('epic-') && game.offerScope !== 'catalogue'
+          "
+          class="muted"
+        >
           This game appears in Epic's promotions feed. Confirm offer dates on
           the store.
         </p>
@@ -161,7 +186,7 @@ async function setPriceAlert() {
           {{ formatPrice(game.price) }}
           <s v-if="game.originalPrice">{{ formatPrice(game.originalPrice) }}</s>
         </div>
-        <p class="muted">on {{ game.store }} · updated today</p>
+        <p class="muted">on {{ game.store }}</p>
         <a
           v-if="game.storeUrl"
           :href="game.storeUrl"
@@ -211,12 +236,16 @@ async function setPriceAlert() {
           <span>Developer</span><strong>{{ game.developer }}</strong>
         </p>
         <p class="fact">
+          <span>Publisher</span
+          ><strong>{{ game.publisher || "Unavailable" }}</strong>
+        </p>
+        <p class="fact">
           <span>Platforms</span><strong>{{ game.platforms.join(", ") }}</strong>
         </p>
       </aside>
     </div>
   </template>
-  <div v-else class="empty-state">
+  <div v-else-if="!error" class="empty-state">
     <h2>Game not found</h2>
     <RouterLink to="/catalogue" class="button primary"
       >Browse catalogue</RouterLink
