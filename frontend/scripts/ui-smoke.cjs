@@ -55,6 +55,16 @@ async function port() {
   const accountJournal = new Map();
   let failNextJournalCreateAfterCommit = false;
   const accountEntries = new Map();
+  let socialProfile = null;
+  const socialReviews = new Map(),
+    socialCollections = new Map();
+  const card = () => ({
+    userId: "fixture-user",
+    username: socialProfile?.username ?? "fixture_player",
+    name: socialProfile?.name ?? "Fixture Player",
+    avatar: "",
+    visibility: "public",
+  });
   let failGames = false;
   let requests = [];
   const api = http.createServer((req, res) => {
@@ -71,6 +81,132 @@ async function port() {
     if (req.method === "OPTIONS") {
       res.statusCode = 204;
       res.end();
+      return;
+    }
+    if (
+      req.url.startsWith("/api/social") ||
+      req.url.startsWith("/api/steam-library")
+    ) {
+      let raw = "";
+      req.on("data", (c) => (raw += c));
+      req.on("end", () => {
+        const v = raw ? JSON.parse(raw) : {},
+          u = new URL(req.url, "http://localhost"),
+          p = u.pathname,
+          m = req.method;
+        requests.push(p + u.search);
+        let result = { data: [], nextCursor: null, nextOffset: null };
+        if (p === "/api/social/me") {
+          if (m === "PUT")
+            socialProfile = {
+              ...v,
+              userId: "fixture-user",
+              version: (socialProfile?.version ?? -1) + 1,
+            };
+          result = { data: socialProfile };
+        } else if (p === "/api/steam-library")
+          result = { data: null, configured: false };
+        else if (p === "/api/social/achievements")
+          result = {
+            data: [
+              {
+                key: "first_game",
+                name: "First Game Added",
+                progress: 1,
+                target: 1,
+                unlockedAt: new Date().toISOString(),
+              },
+            ],
+          };
+        else if (p === "/api/social/notifications")
+          result = {
+            data: [
+              {
+                id: "notif-1",
+                message: "Achievement unlocked: First Game Added",
+                kind: "achievement",
+                createdAt: new Date().toISOString(),
+                readAt: null,
+              },
+            ],
+            unread: 1,
+            nextCursor: null,
+          };
+        else if (p === "/api/social/users")
+          result = { data: [card()], nextOffset: null };
+        else if (p.startsWith("/api/social/profiles/"))
+          result = {
+            data: {
+              ...card(),
+              ...socialProfile,
+              locked: false,
+              relationship: "none",
+              followers: 0,
+              following: 0,
+              library: [...accountEntries.values()].map((e) => ({
+                game: e.game,
+                status: e.status,
+                favorite: e.favorite,
+              })),
+              achievements: [],
+            },
+          };
+        else if (p === "/api/social/reviews") {
+          if (m === "POST") {
+            const r = {
+              ...v,
+              id: "review-" + socialReviews.size,
+              userId: "fixture-user",
+              slug: v.game.slug,
+              author: card(),
+              likes: 0,
+              liked: false,
+              createdAt: new Date().toISOString(),
+            };
+            socialReviews.set(r.id, r);
+            result = { data: r };
+          } else
+            result = { data: [...socialReviews.values()], nextOffset: null };
+        } else if (p.startsWith("/api/social/reviews/")) {
+          const id = p.split("/")[4],
+            r = socialReviews.get(id);
+          if (p.endsWith("/like")) {
+            r.liked = m === "POST";
+            r.likes = r.liked ? 1 : 0;
+          } else if (m === "PATCH")
+            socialReviews.set(id, { ...r, ...v, version: r.version + 1 });
+          else if (m === "DELETE") socialReviews.delete(id);
+          result = { data: socialReviews.get(id) };
+        } else if (p === "/api/social/collections") {
+          if (m === "POST") {
+            const c = {
+              ...v,
+              id: "collection-" + socialCollections.size,
+              userId: "fixture-user",
+              author: card(),
+              followers: 0,
+              followed: false,
+            };
+            socialCollections.set(c.id, c);
+            result = { data: c };
+          } else
+            result = {
+              data: [...socialCollections.values()],
+              nextCursor: null,
+            };
+        } else if (p.startsWith("/api/social/collections/")) {
+          const id = p.split("/")[4];
+          if (m === "PATCH")
+            socialCollections.set(id, {
+              ...socialCollections.get(id),
+              ...v,
+              version: v.version + 1,
+            });
+          else if (m === "DELETE") socialCollections.delete(id);
+          result = { data: socialCollections.get(id) };
+        }
+        res.end(JSON.stringify(result));
+      });
       return;
     }
     if (
@@ -1014,6 +1150,92 @@ async function port() {
       deviceScaleFactor: 1,
       mobile: false,
     });
+    // Social UI uses fixture APIs; MySQL authorization is exercised separately.
+    await evaluate('localStorage.setItem("gamevault_token","fixture-token")');
+    await navigate("/social/studio", "form.social-form");
+    await evaluate(
+      'const f=document.querySelector("form.social-form"),inputs=f.querySelectorAll("input");for(const [n,v] of [[0,"fixture_player"],[1,"Fixture Player"]]){inputs[n].value=v;inputs[n].dispatchEvent(new Event("input",{bubbles:true}));}const select=f.querySelector("select");select.value="public";select.dispatchEvent(new Event("change",{bubbles:true}));f.requestSubmit();',
+    );
+    await waitFor(
+      () =>
+        evaluate(
+          'document.body.textContent.includes("Profile and preferences saved")',
+        ),
+      "social profile saved",
+    );
+    assert.equal(socialProfile.username, "fixture_player");
+    await navigate("/u/fixture_player", ".social-profile-hero h1");
+    assert.equal(
+      await evaluate(
+        'document.querySelector(".social-profile-hero h1").textContent',
+      ),
+      "Fixture Player",
+    );
+    await navigate("/games/steam-100", ".community-reviews form.social-form");
+    await evaluate(
+      'const f=document.querySelector(".community-reviews form.social-form"),inputs=f.querySelectorAll("input");inputs[0].value="Public fixture review";inputs[0].dispatchEvent(new Event("input",{bubbles:true}));const body=f.querySelector("textarea");body.value="<script>window.__storedXss=1</script> An excellent game.";body.dispatchEvent(new Event("input",{bubbles:true}));const spoiler=f.querySelector("input[type=checkbox]");spoiler.click();f.requestSubmit();',
+    );
+    await waitFor(
+      () => evaluate('!!document.querySelector(".review-card details")'),
+      "spoiler review published",
+    );
+    assert.equal(socialReviews.size, 1);
+    assert.equal(await evaluate("window.__storedXss"), undefined);
+    await evaluate(
+      'document.querySelector(".review-card .hero-actions button").click()',
+    );
+    await waitFor(
+      () =>
+        evaluate(
+          'document.querySelector(".review-card .hero-actions button").getAttribute("aria-pressed")==="true"',
+        ),
+      "review like",
+    );
+    await navigate("/community/collections/new", "form.social-form");
+    await evaluate(
+      'const f=document.querySelector("form.social-form"),input=f.querySelector("input");input.value="Fixture shared collection";input.dispatchEvent(new Event("input",{bubbles:true}));const visibility=[...f.querySelectorAll("select")].at(-1);visibility.value="public";visibility.dispatchEvent(new Event("change",{bubbles:true}));f.requestSubmit();',
+    );
+    await waitFor(
+      () => evaluate('document.body.textContent.includes("Share this page")'),
+      "shared collection saved",
+    );
+    assert.equal(socialCollections.size, 1);
+    await navigate(
+      "/community?tab=Notifications",
+      ".social-page .account-panel",
+    );
+    assert.match(
+      await evaluate('document.querySelector("main").textContent'),
+      /Achievement unlocked/,
+    );
+    for (const width of [1440, 768, 390, 320]) {
+      await cdp("Emulation.setDeviceMetricsOverride", {
+        width,
+        height: 1000,
+        deviceScaleFactor: 1,
+        mobile: width < 768,
+      });
+      for (const [path, selector] of [
+        ["/community", ".social-tabs"],
+        ["/social/studio", "form.social-form"],
+        ["/u/fixture_player", ".social-profile-hero"],
+        ["/community/collections/collection-0", ".social-game-grid"],
+      ]) {
+        await navigate(path, selector);
+        await delay(80);
+        assert.equal(
+          await evaluate("document.documentElement.scrollWidth<=innerWidth+1"),
+          true,
+          path + " social overflow at " + width,
+        );
+      }
+    }
+    await cdp("Emulation.setDeviceMetricsOverride", {
+      width: 1440,
+      height: 1000,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
     await navigate("/", ".hero h1");
     await delay(250);
     const shot = await cdp("Page.captureScreenshot", { format: "png" });
@@ -1022,7 +1244,7 @@ async function port() {
     console.log("Visual screenshot: " + shotPath);
     assert.deepEqual(errors, []);
     console.log(
-      "PASS: normalized journal pagination/search/import/review CRUD and summaries; collections/journal/spoiler/picker/comparison/watchlist/PNG and 15 responsive routes; multi-store deal pagination/filter/custom budget; account sign-in/import/save/refresh/sign-out plus guest add/favorite/journal/persistence/dashboard/removal, search empty and retry, mobile menu, dialog keyboard, and 7 routes at 1440/1024/768/390/320px.",
+      "PASS: social profile publishing/review spoilers and escaping/likes/shared collections/inbox and responsive social routes; normalized journal pagination/search/import/review CRUD and summaries; collections/journal/spoiler/picker/comparison/watchlist/PNG and 15 responsive routes; multi-store deal pagination/filter/custom budget; account sign-in/import/save/refresh/sign-out plus guest add/favorite/journal/persistence/dashboard/removal, search empty and retry, mobile menu, dialog keyboard, and 7 routes at 1440/1024/768/390/320px.",
     );
   } catch (error) {
     console.error(

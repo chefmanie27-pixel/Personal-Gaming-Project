@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import {useSocialStore} from "../stores/social";
+const social=useSocialStore();
 import { useLibraryStore, statuses } from "../stores/library";
 const library = useLibraryStore();
 </script>
@@ -10,7 +12,7 @@ const library = useLibraryStore();
       {{ library.scopeDescription }} Add playtime and ratings in each game's
       journal.
     </p>
-    <div class="dashboard-stats">
+    <div v-if="social.me?.settings.showStats!==false" class="dashboard-stats">
       <article
         v-for="[label, value] in [
           ['Total games', library.stats.total],

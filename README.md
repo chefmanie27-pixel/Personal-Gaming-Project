@@ -186,3 +186,7 @@ See [implementation plan](docs/GAMEVAULT_IMPLEMENTATION_PLAN.md), [progress by p
 ## Indexed account journals
 
 Account journals now use an indexed JournalRecord table with paginated reads and independent edit revisions. Existing JSON entries migrate transactionally on the next account load. This removes the old workspace-wide history limit for authenticated users, preserves device-only journals/import, and calculates annual summaries without sending private notes to the browser. The new migration is applied locally; refresh the app to load the new client. See [journal storage and rollout](docs/GAMEVAULT_JOURNAL_STORAGE.md).
+
+## GameVault 2.0 social features
+
+Visit `/community` and `/social/studio` after signing in. Profiles default to private; community reviews and shared collections require explicit publication. Existing journals stay private. See [implementation report](docs/GAMEVAULT_2_0_REPORT.md) for migration/setup instructions, verification and supported Steam configuration.

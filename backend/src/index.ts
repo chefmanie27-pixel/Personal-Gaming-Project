@@ -1,3 +1,5 @@
+import { steamLibrary } from "./steamLibrary.js";
+import { createSocialRouter } from "./social.js";
 import "dotenv/config";
 import { createJournalRouter } from "./journal.js";
 import { databaseJournal } from "./journalRepository.js";
@@ -33,6 +35,12 @@ import { startScheduler } from "./jobs/scheduler.js";
 
 const app = express();
 const port = config.PORT;
+app.disable("x-powered-by");
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  next();
+});
 app.use(cors({ origin: config.FRONTEND_ORIGIN }));
 app.use(
   "/api/library",
@@ -50,8 +58,15 @@ app.use(
   createJournalRouter(databaseJournal),
 );
 app.use(express.json());
+app.use("/api/social", createSocialRouter());
+app.use("/api/steam-library", steamLibrary);
 app.post(
-  ["/api/auth/login", "/api/auth/register", "/api/auth/steam/exchange"],
+  [
+    "/api/auth/login",
+    "/api/auth/register",
+    "/api/auth/steam/exchange",
+    "/api/auth/steam/link-ticket",
+  ],
   authRateLimit(),
 );
 app.use("/api/auth", steamAuth);

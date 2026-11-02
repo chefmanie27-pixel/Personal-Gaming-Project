@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import {useSocialStore} from "../stores/social";
+const social=useSocialStore();
 import { computed, onMounted, ref } from "vue";
 import RecommendationsPanel from "../components/RecommendationsPanel.vue";
 import LuckyPick from "../components/LuckyPick.vue";
@@ -216,6 +218,6 @@ function scrollRow(event: MouseEvent, direction: number) {
         <GameCard v-for="game in section.games" :key="game.slug" :game="game" />
       </div>
     </section>
-    <RecommendationsPanel /><LuckyPick />
+    <RecommendationsPanel v-if="social.me?.settings.showRecommendations!==false" /><LuckyPick />
   </div>
 </template>

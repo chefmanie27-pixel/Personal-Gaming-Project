@@ -5,6 +5,8 @@ import AuthDialog from "./AuthDialog.vue";
 import { useAuthStore } from "../stores/auth";
 const router = useRouter();
 const route = useRoute();
+import { useSocialStore } from "../stores/social";
+const social = useSocialStore();
 const auth = useAuthStore();
 const showAuth = ref(false);
 const open = ref(false);
@@ -60,6 +62,8 @@ const links = [
   { to: "/deals", label: "Deals" },
 ];
 const moreLinks = [
+  { to: "/community", label: "Community" },
+  { to: "/social/studio", label: "Social profile studio" },
   { to: "/backlog", label: "Backlog" },
   { to: "/journal", label: "Journal" },
   { to: "/collections", label: "Collections" },
@@ -129,6 +133,13 @@ const moreLinks = [
         <option v-for="term in history" :key="term" :value="term" />
       </datalist>
     </form>
+    <RouterLink
+      v-if="auth.user"
+      to="/community?tab=Notifications"
+      class="button ghost notification-link"
+      :aria-label="social.unread + ' unread notifications'"
+      >Inbox<span v-if="social.unread"> ({{ social.unread }})</span></RouterLink
+    >
     <RouterLink
       v-if="auth.user"
       to="/account"

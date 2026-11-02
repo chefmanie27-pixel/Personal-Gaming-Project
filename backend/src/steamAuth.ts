@@ -2,17 +2,57 @@ import { Router } from "express";
 import { randomBytes } from "node:crypto";
 import { config } from "./config.js";
 import { prisma } from "./db.js";
-import { hashPassword, issueToken } from "./auth.js";
+import {
+  hashPassword,
+  issueToken,
+  requireAuth,
+  type AuthRequest,
+} from "./auth.js";
 export const steamAuth = Router();
 const states = new Map<string, number>();
+const linkTargets = new Map<string, string>();
+const linkTickets = new Map<string, { userId: string; expires: number }>();
+steamAuth.post("/steam/link-ticket", requireAuth, (req: AuthRequest, res) => {
+  for (const [k, v] of linkTickets)
+    if (v.expires < Date.now()) linkTickets.delete(k);
+  if (linkTickets.size >= 10000)
+    return res.status(429).json({ error: "Please retry later." });
+  const ticket = randomBytes(32).toString("hex");
+  linkTickets.set(ticket, {
+    userId: req.user!.id,
+    expires: Date.now() + 60000,
+  });
+  res.setHeader("Cache-Control", "no-store");
+  return res.json({
+    url: config.PUBLIC_API_ORIGIN + "/api/auth/steam?link_ticket=" + ticket,
+  });
+});
 const tickets = new Map<string, { token: string; expires: number }>();
 const endpoint = "https://steamcommunity.com/openid/login";
 const callback = config.PUBLIC_API_ORIGIN + "/api/auth/steam/callback";
-steamAuth.get("/steam", (_req, res) => {
+steamAuth.get("/steam", (req, res) => {
+  let linkUser: string | undefined;
+  if (req.query.link_ticket) {
+    const key = String(req.query.link_ticket),
+      t = linkTickets.get(key);
+    linkTickets.delete(key);
+    if (!t || t.expires < Date.now())
+      return res
+        .status(400)
+        .json({ error: "Link request expired. Retry from your account." });
+    linkUser = t.userId;
+  }
   res.setHeader("Cache-Control", "no-store");
-  for (const [k, v] of states) if (v < Date.now()) states.delete(k);
+  for (const [k, v] of states)
+    if (v < Date.now()) {
+      states.delete(k);
+      linkTargets.delete(k);
+    }
+  if (states.size >= 10000)
+    return res.status(429).json({ error: "Please retry later." });
   const state = randomBytes(32).toString("hex");
   states.set(state, Date.now() + 600000);
+  if (linkUser) linkTargets.set(state, linkUser);
   res.cookie("steam_state", state, {
     httpOnly: true,
     sameSite: "lax",
@@ -42,6 +82,8 @@ steamAuth.get("/steam/callback", async (req, res) => {
       ?.slice(12);
     const expiry = states.get(state);
     states.delete(state);
+    const linkUser = linkTargets.get(state);
+    linkTargets.delete(state);
     res.clearCookie("steam_state", { path: "/api/auth/steam" });
     if (!expiry || expiry < Date.now() || cookie !== state)
       throw new Error("Invalid login state");
@@ -82,13 +124,53 @@ steamAuth.get("/steam/callback", async (req, res) => {
     )
       throw new Error("Verification failed");
     const steamId = identity.split("/").pop()!;
+    if (linkUser) {
+      await prisma.$transaction(async (db) => {
+        if (!(await db.user.findUnique({ where: { id: linkUser } })))
+          throw new Error("Account unavailable");
+        const old = await db.steamConnection.findUnique({ where: { steamId } });
+        const current = await db.steamConnection.findUnique({
+          where: { userId: linkUser },
+        });
+        if (current && current.steamId !== steamId)
+          throw new Error("Disconnect the previous Steam account first");
+        const synthetic = await db.user.findUnique({
+          where: { email: "steam-" + steamId + "@steam.gamevault.invalid" },
+          select: { id: true },
+        });
+        if (
+          (old && old.userId !== linkUser) ||
+          (synthetic && synthetic.id !== linkUser)
+        )
+          throw new Error("Steam already belongs to another account");
+        await db.steamConnection.upsert({
+          where: { userId: linkUser },
+          create: { userId: linkUser, steamId },
+          update: { steamId, status: "idle", lastSyncedAt: null, processed: 0 },
+        });
+      });
+      return res.redirect(
+        config.FRONTEND_ORIGIN + "/social/studio#steam_linked=1",
+      );
+    }
+    const linked = await prisma.steamConnection.findUnique({
+      where: { steamId },
+      include: { user: true },
+    });
     const email = "steam-" + steamId + "@steam.gamevault.invalid";
-    const user = await prisma.user.upsert({
-      where: { email },
-      create: {
-        email,
-        passwordHash: await hashPassword(randomBytes(48).toString("hex")),
-      },
+    const user =
+      linked?.user ??
+      (await prisma.user.upsert({
+        where: { email },
+        create: {
+          email,
+          passwordHash: await hashPassword(randomBytes(48).toString("hex")),
+        },
+        update: {},
+      }));
+    await prisma.steamConnection.upsert({
+      where: { userId: user.id },
+      create: { userId: user.id, steamId },
       update: {},
     });
     for (const [k, v] of tickets) if (v.expires < Date.now()) tickets.delete(k);

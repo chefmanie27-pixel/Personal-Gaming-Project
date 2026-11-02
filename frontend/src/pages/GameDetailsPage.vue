@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import CommunityReviews from "../components/CommunityReviews.vue";
 import GameMedia from "../components/GameMedia.vue";
 import LibraryControls from "../components/LibraryControls.vue";
 import RelatedContent from "../components/RelatedContent.vue";
@@ -244,7 +245,8 @@ async function setPriceAlert() {
         </p>
       </aside>
     </div>
-  </template>
+  <CommunityReviews v-if="game" :game="game" />
+</template>
   <div v-else-if="!error" class="empty-state">
     <h2>Game not found</h2>
     <RouterLink to="/catalogue" class="button primary"

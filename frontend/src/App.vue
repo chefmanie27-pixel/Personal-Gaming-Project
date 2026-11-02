@@ -3,6 +3,8 @@ import { watch, onBeforeUnmount, onMounted } from "vue";
 import { useAuthStore } from "./stores/auth";
 import { useLibraryStore } from "./stores/library";
 import { useWorkspaceStore } from "./stores/workspace";
+import { useSocialStore } from "./stores/social";
+const social = useSocialStore();
 const workspace = useWorkspaceStore();
 const library = useLibraryStore();
 watch(
@@ -19,12 +21,32 @@ watch(
     toastTimer = setTimeout(() => (library.message = ""), 4000);
   },
 );
-onBeforeUnmount(() => clearTimeout(toastTimer));
+let socialPoll: ReturnType<typeof setInterval>;
+onMounted(() => {
+  socialPoll = setInterval(() => void social.poll(), 60000);
+});
+onBeforeUnmount(() => {
+  clearTimeout(toastTimer);
+  clearInterval(socialPoll);
+});
+watch(
+  () => social.me?.settings,
+  (s) => {
+    document.documentElement.dataset.accent = s?.accent ?? "violet";
+    document.documentElement.dataset.density = s?.density ?? "comfortable";
+    document.documentElement.classList.toggle(
+      "reduce-motion",
+      s?.reducedMotion ?? false,
+    );
+  },
+  { deep: true, immediate: true },
+);
 const auth = useAuthStore();
 onMounted(() => auth.restore());
 watch(
   () => [auth.user?.id, auth.token] as const,
   ([userId, token]) => {
+    void social.connect().then(() => social.poll());
     void library.connect(token, userId ?? null);
     void workspace.connect(token, userId ?? null);
   },

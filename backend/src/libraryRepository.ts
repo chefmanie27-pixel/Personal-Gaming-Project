@@ -1,3 +1,4 @@
+import { activity, awardAchievements } from "./social.js";
 import type { LibraryEntry, Prisma } from "@prisma/client";
 import { prisma } from "./db.js";
 import type { SavedEntry, LibraryRepository } from "./library.js";
@@ -25,6 +26,25 @@ function create(userId: string, entry: SavedEntry) {
     addedAt: new Date(entry.addedAt),
   };
 }
+async function socialLibrary(
+  db: Prisma.TransactionClient,
+  userId: string,
+  slug: string,
+) {
+  const p = await db.socialProfile.findUnique({ where: { userId } });
+  if (!p) return;
+  const row = await db.libraryEntry.findUnique({
+    where: { userId_slug: { userId, slug } },
+  });
+  if (row && p.shareLibrary) {
+    const title = (row.game as { title?: string }).title ?? slug;
+    await activity(db, userId, "added", slug, title);
+    if (row.status === "Completed")
+      await activity(db, userId, "completed", slug, title);
+    if (row.favorite) await activity(db, userId, "favorite", slug, title);
+  }
+  await awardAchievements(db, userId);
+}
 export const databaseLibrary: LibraryRepository = {
   async list(userId) {
     return (
@@ -35,23 +55,31 @@ export const databaseLibrary: LibraryRepository = {
     ).map(output);
   },
   async add(userId, entry) {
-    return output(
-      await prisma.libraryEntry.upsert({
-        where: { userId_slug: { userId, slug: entry.game.slug } },
-        create: create(userId, entry),
-        update: {},
-      }),
-    );
+    return prisma.$transaction(async (db) => {
+      const saved = output(
+        await db.libraryEntry.upsert({
+          where: { userId_slug: { userId, slug: entry.game.slug } },
+          create: create(userId, entry),
+          update: {},
+        }),
+      );
+      await socialLibrary(db, userId, entry.game.slug);
+      return saved;
+    });
   },
   async update(userId, slug, patch) {
     // A user-scoped unique key prevents another account's entry from being changed.
     try {
-      return output(
-        await prisma.libraryEntry.update({
-          where: { userId_slug: { userId, slug } },
-          data: patch,
-        }),
-      );
+      return await prisma.$transaction(async (db) => {
+        const saved = output(
+          await db.libraryEntry.update({
+            where: { userId_slug: { userId, slug } },
+            data: patch,
+          }),
+        );
+        await socialLibrary(db, userId, slug);
+        return saved;
+      });
     } catch (error) {
       if (
         error &&

@@ -12,6 +12,10 @@ const schema = z.object({
     .min(32)
     .default("development-only-secret-change-this-before-production-123"),
   PUBLIC_API_ORIGIN: z.string().url().default("http://localhost:3000"),
+  STEAM_WEB_API_KEY: z.preprocess(
+    (v) => (v === "" ? undefined : v),
+    z.string().min(1).optional(),
+  ),
   RAWG_API_KEY: z.string().optional(),
 });
 

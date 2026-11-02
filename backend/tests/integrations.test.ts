@@ -111,6 +111,12 @@ test("verified Steam login issues a one-use exchange code, never a token in the 
   const { config } = await import("../src/config.js");
   const originalFetch = globalThis.fetch;
   const originalUpsert = prisma.user.upsert;
+  const originalConnection = prisma.steamConnection.findUnique;
+  const originalConnectionUpsert = prisma.steamConnection.upsert;
+  prisma.steamConnection.upsert =
+    (async () => ({})) as typeof originalConnectionUpsert;
+  prisma.steamConnection.findUnique = (async () =>
+    null) as typeof originalConnection;
   let persisted = false;
   prisma.user.upsert = (async (args: unknown) => {
     persisted = true;
@@ -185,6 +191,8 @@ test("verified Steam login issues a one-use exchange code, never a token in the 
   } finally {
     globalThis.fetch = originalFetch;
     prisma.user.upsert = originalUpsert;
+    prisma.steamConnection.findUnique = originalConnection;
+    prisma.steamConnection.upsert = originalConnectionUpsert;
     await new Promise<void>((resolve, reject) =>
       server.close((e) => (e ? reject(e) : resolve())),
     );
