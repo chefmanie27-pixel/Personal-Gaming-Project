@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import {useSocialStore} from "../stores/social";
-const social=useSocialStore();
+import UiState from "../components/UiState.vue";
+import { useSocialStore } from "../stores/social";
+const social = useSocialStore();
 import { computed, onMounted, ref } from "vue";
 import RecommendationsPanel from "../components/RecommendationsPanel.vue";
 import LuckyPick from "../components/LuckyPick.vue";
@@ -31,31 +32,33 @@ const featured = computed(() => featuredGames.value[active.value]);
 const sections = computed(() => {
   const used = new Set<string>();
   const take = (items: Game[], count = 10) => {
-    const result = items.filter((g) => !used.has(g.slug)).slice(0, count);
-    for (const g of result) used.add(g.slug);
-    return result;
+    const rows = items.filter((g) => !used.has(g.slug)).slice(0, count);
+    rows.forEach((g) => used.add(g.slug));
+    return rows;
   };
-
-  return [
-    {
+  const definitions: Record<
+    string,
+    { title: string; kicker: string; candidates: () => Game[]; count?: number }
+  > = {
+    popular: {
       title: "Popular right now",
       kicker: "FROM THE STOREFRONT",
-      games: take(games.value, 12),
+      candidates: () => games.value,
+      count: 12,
     },
-    {
+    rated: {
       title: "Top rated",
       kicker: "CRITIC APPROVED",
-      games: take(
+      candidates: () =>
         [...games.value]
           .filter((g) => g.score !== null)
           .sort((a, b) => b.score! - a.score!),
-      ),
     },
-    {
+    recent: {
       title: "Recently released",
       kicker: "SOMETHING NEW",
-      games: take(
-        [...games.value]
+      candidates: () =>
+        games.value
           .filter(
             (g) =>
               g.releaseDate && new Date(g.releaseDate).getTime() <= Date.now(),
@@ -65,25 +68,43 @@ const sections = computed(() => {
               (new Date(b.releaseDate).getTime() || 0) -
               (new Date(a.releaseDate).getTime() || 0),
           ),
-      ),
     },
-    {
+    upcoming: {
       title: "Upcoming releases",
       kicker: "ON THE HORIZON",
-      games: take(
+      candidates: () =>
         games.value.filter(
           (g) =>
             g.status === "upcoming" ||
             new Date(g.releaseDate).getTime() > Date.now(),
         ),
-      ),
     },
-    {
+    more: {
       title: "More to discover",
       kicker: "TAKE A DIFFERENT PATH",
-      games: take(games.value, 12),
+      candidates: () => games.value,
+      count: 12,
     },
-  ].filter((s) => s.games.length);
+  };
+  return (
+    social.me?.settings.homeSections ?? [
+      "popular",
+      "rated",
+      "recent",
+      "upcoming",
+      "more",
+    ]
+  )
+    .filter((k) => definitions[k])
+    .map((key) => {
+      const d = definitions[key];
+      return {
+        title: d.title,
+        kicker: d.kicker,
+        games: take(d.candidates(), d.count),
+      };
+    })
+    .filter((s) => s.games.length);
 });
 function scrollRow(event: MouseEvent, direction: number) {
   const row = (event.currentTarget as HTMLElement)
@@ -156,11 +177,51 @@ function scrollRow(event: MouseEvent, direction: number) {
     role="status"
   ></div>
   <div class="page-container">
-    <div v-if="error" class="empty-state" role="alert">
-      <h2>Discovery will be back shortly</h2>
-      <p>{{ error }}</p>
-      <button class="button primary" @click="load">Try again</button>
-    </div>
+    <section class="welcome-strip" aria-label="Your next step">
+      <div>
+        <p class="section-kicker">
+          {{ social.me ? "WELCOME BACK" : "MAKE IT YOUR VAULT" }}
+        </p>
+        <h2>
+          {{
+            social.me
+              ? social.me.name + ", your next chapter awaits."
+              : "Discover a game. Build your collection."
+          }}
+        </h2>
+        <p class="muted">
+          {{
+            library.entries.length
+              ? library.entries.length +
+                " games in your collection. Pick up where you left off or find something new."
+              : "Start with a game you love. Track your backlog and share only what you choose."
+          }}
+        </p>
+      </div>
+      <div class="hero-actions">
+        <RouterLink
+          class="button primary"
+          :to="library.entries.length ? '/library' : '/catalogue'"
+          >{{
+            library.entries.length ? "Open my library" : "Explore the catalogue"
+          }}</RouterLink
+        ><RouterLink
+          class="button ghost"
+          :to="library.entries.length ? '/play-next' : '/community'"
+          >{{
+            library.entries.length ? "Help me choose" : "Meet the community"
+          }}</RouterLink
+        >
+      </div>
+    </section>
+    <UiState
+      v-if="error"
+      kind="error"
+      title="Discovery will be back shortly"
+      :description="error"
+      retry
+      @retry="load"
+    />
     <section v-if="!error" class="section-block">
       <div class="section-heading">
         <div>
@@ -218,6 +279,8 @@ function scrollRow(event: MouseEvent, direction: number) {
         <GameCard v-for="game in section.games" :key="game.slug" :game="game" />
       </div>
     </section>
-    <RecommendationsPanel v-if="social.me?.settings.showRecommendations!==false" /><LuckyPick />
+    <RecommendationsPanel
+      v-if="social.me?.settings.showRecommendations !== false"
+    /><LuckyPick />
   </div>
 </template>

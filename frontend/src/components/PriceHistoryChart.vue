@@ -1,29 +1,154 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
-import { Chart, LineController, LineElement, PointElement, LinearScale, CategoryScale, Tooltip, Filler } from 'chart.js'
-import { fetchPriceHistory } from '../services/api'
-
-Chart.register(LineController, LineElement, PointElement, LinearScale, CategoryScale, Tooltip, Filler)
-const props = defineProps<{ slug: string }>()
-const canvas = ref<HTMLCanvasElement>()
-const sourceType = ref('unavailable')
-const hasHistory = ref(false)
-let chart: Chart | undefined
-
-onMounted(async () => {
-  const result = await fetchPriceHistory(props.slug)
-  sourceType.value = result.meta.sourceType
-  hasHistory.value = result.data.length > 0
-  if (!canvas.value) return
-  chart = new Chart(canvas.value, {
-    type: 'line',
-    data: { labels: result.data.map((point) => new Date(point.observedAt).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' })), datasets: [{ data: result.data.map((point) => point.amount), borderColor: '#9c7cff', backgroundColor: 'rgba(156,124,255,.12)', fill: true, tension: .35, pointRadius: 4, pointBackgroundColor: '#9c7cff' }] },
-    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (context) => ` R${Number(context.parsed.y).toFixed(2)}` } } }, scales: { x: { grid: { display: false }, ticks: { color: '#8d91a3' } }, y: { grid: { color: 'rgba(255,255,255,.07)' }, ticks: { color: '#8d91a3', callback: (value) => `R${value}` } } } },
-  })
-})
-onUnmounted(() => chart?.destroy())
+import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
+import { fetchPriceHistory } from "../services/api";
+import UiState from "./UiState.vue";
+const props = defineProps<{ slug: string }>(),
+  canvas = ref<HTMLCanvasElement>(),
+  points = ref<
+    Array<{ amount: number; observedAt: string; sourceType: string }>
+  >([]),
+  loading = ref(false),
+  error = ref(""),
+  coverage = ref("");
+let chart: { destroy: () => void } | undefined,
+  revision = 0;
+const latest = computed(() => points.value.at(-1)),
+  lowest = computed(() =>
+    points.value.length ? Math.min(...points.value.map((p) => p.amount)) : null,
+  ),
+  movement = computed(() =>
+    points.value.length > 1
+      ? points.value.at(-1)!.amount - points.value[0].amount
+      : null,
+  );
+async function load() {
+  const current = ++revision;
+  loading.value = true;
+  error.value = "";
+  chart?.destroy();
+  chart = undefined;
+  try {
+    const r = await fetchPriceHistory(props.slug);
+    if (current !== revision) return;
+    if (r.meta.sourceType === "unavailable") throw new Error();
+    points.value = r.data
+      .filter(
+        (p) =>
+          Number.isFinite(p.amount) &&
+          p.amount >= 0 &&
+          Number.isFinite(Date.parse(p.observedAt)),
+      )
+      .sort((a, b) => a.observedAt.localeCompare(b.observedAt));
+    coverage.value =
+      r.meta.coverage ?? "Only genuine stored regional observations are shown.";
+    loading.value = false;
+    await nextTick();
+    if (!points.value.length || !canvas.value) return;
+    const { createPriceChart } = await import("../utils/priceChart");
+    if (current !== revision || !canvas.value) return;
+    chart = createPriceChart(
+      canvas.value,
+      points.value,
+      matchMedia("(prefers-reduced-motion: reduce)").matches ||
+        document.documentElement.classList.contains("reduce-motion"),
+      getComputedStyle(document.documentElement)
+        .getPropertyValue("--purple")
+        .trim() || "#9c7cff",
+    );
+  } catch {
+    if (current === revision) {
+      points.value = [];
+      error.value =
+        "Stored price history could not load. No prices have been invented.";
+    }
+  } finally {
+    if (current === revision) loading.value = false;
+  }
+}
+onMounted(load);
+onUnmounted(() => {
+  revision++;
+  chart?.destroy();
+});
+const money = (n: number) => "R" + n.toFixed(2);
 </script>
-
 <template>
-  <div class="history-card"><div class="history-heading"><div><p class="section-kicker">PRICE HISTORY · ZAR</p><h3>Track the value</h3></div><span class="mock-label">{{ sourceType === 'observed' && hasHistory ? '● Verified observations' : '● Development data' }}</span></div><div class="chart-wrap"><canvas ref="canvas"></canvas></div></div>
+  <section class="history-card">
+    <div class="history-heading">
+      <div>
+        <p class="section-kicker">PRICE HISTORY / SOUTH AFRICA / ZAR</p>
+        <h3>Recorded prices, with context</h3>
+      </div>
+      <button class="button ghost" :disabled="loading" @click="load">
+        Refresh history
+      </button>
+    </div>
+    <UiState
+      v-if="loading"
+      kind="loading"
+      title="Loading stored observations"
+    /><UiState
+      v-else-if="error"
+      kind="error"
+      title="Price history unavailable"
+      :description="error"
+      retry
+      @retry="load"
+    /><UiState
+      v-else-if="!points.length"
+      title="No price observations yet"
+      description="This chart stays empty until a genuine regional observation is saved. Use Save current store observation on this game, or check the official storefront for its current quote."
+    /><template v-else
+      ><div class="dashboard-stats">
+        <article class="stat-card">
+          <span>Latest stored quote</span
+          ><strong>{{ money(latest!.amount) }}</strong>
+        </article>
+        <article class="stat-card">
+          <span>Lowest in this history</span
+          ><strong>{{ money(lowest!) }}</strong>
+        </article>
+        <article class="stat-card">
+          <span>Change across recorded period</span
+          ><strong>{{
+            movement === null ? "Not enough data" : money(movement)
+          }}</strong>
+        </article>
+      </div>
+      <p class="muted">
+        {{ points.length }} stored observations. Latest:
+        {{ new Date(latest!.observedAt).toLocaleString() }}. Source:
+        {{ latest!.sourceType }}. {{ coverage }} This is not a fresh checkout
+        guarantee.
+      </p>
+      <div class="chart-wrap">
+        <canvas
+          ref="canvas"
+          role="img"
+          aria-label="Regional price history; equivalent values are available in the table below"
+        />
+      </div>
+      <details>
+        <summary>View recorded prices as a table</summary>
+        <div class="table-scroll">
+          <table class="activity-months">
+            <thead>
+              <tr>
+                <th scope="col">Observed</th>
+                <th scope="col">ZAR</th>
+                <th scope="col">Source</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(p, i) in points" :key="i">
+                <td>{{ new Date(p.observedAt).toLocaleString() }}</td>
+                <td>{{ money(p.amount) }}</td>
+                <td>{{ p.sourceType }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </details></template
+    >
+  </section>
 </template>

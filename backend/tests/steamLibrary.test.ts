@@ -231,6 +231,8 @@ test(
         (await api("/steam/achievements/440", 1, "POST", {})).status,
         409,
       );
+      assert.equal((await api("/steam/achievements/440", 0)).status, 200);
+      assert.equal((await api("/steam/achievements/440", 1)).status, 404);
       isPrivate = true;
       assert.equal((await api("/steam/sync", 0, "POST", {})).status, 502);
       assert.equal(

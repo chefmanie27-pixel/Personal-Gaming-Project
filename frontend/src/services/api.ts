@@ -36,7 +36,13 @@ export async function fetchDeals(
 
 export async function fetchPriceHistory(slug: string): Promise<{
   data: Array<{ amount: number; observedAt: string; sourceType: string }>;
-  meta: { currency: string; sourceType: string };
+  meta: {
+    currency: string;
+    sourceType: string;
+    coverage?: string;
+    region?: string;
+    store?: string;
+  };
 }> {
   const { data } = await client.get(`/games/${slug}/price-history`);
   return data;

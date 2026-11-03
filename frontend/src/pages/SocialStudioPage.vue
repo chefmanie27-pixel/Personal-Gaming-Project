@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import ArtworkUpload from "../components/ArtworkUpload.vue";
+import SocialExtras from "../components/SocialExtras.vue";
 import { reactive, ref, watch } from "vue";
 import { useAuthStore } from "../stores/auth";
 import {
@@ -22,6 +24,8 @@ const auth = useAuthStore(),
   configured = ref(false),
   appId = ref(""),
   steamAchievements = ref<any[]>([]);
+const requestOffset = ref<number | null>(null),
+  blockOffset = ref<number | null>(null);
 const draft = reactive({
   username: "",
   name: "",
@@ -50,7 +54,7 @@ async function load() {
         visibility: p.visibility,
         shareLibrary: p.shareLibrary,
         version: p.version,
-        settings: { ...p.settings },
+        settings: JSON.parse(JSON.stringify({ ...defaults(), ...p.settings })),
       });
     else
       Object.assign(draft, {
@@ -71,6 +75,8 @@ async function load() {
       social.request("/steam-library"),
     ]);
     requests.value = r.data;
+    requestOffset.value = r.nextOffset ?? null;
+    blockOffset.value = b.nextOffset ?? null;
     blocks.value = b.data;
     achievements.value = a.data;
     steam.value = s.data;
@@ -104,6 +110,30 @@ async function save() {
     social.me = p.data;
     draft.version = p.data.version;
     notice.value = "Profile and preferences saved.";
+  });
+}
+async function moreManagement(kind: "requests" | "blocks") {
+  await run(async () => {
+    const next = kind === "requests" ? requestOffset.value : blockOffset.value;
+    if (next === null) return;
+    const r = await social.request("/social/" + kind + "?offset=" + next);
+    if (kind === "requests") {
+      requests.value = [
+        ...requests.value,
+        ...r.data.filter(
+          (v: any) => !requests.value.some((p) => p.userId === v.userId),
+        ),
+      ];
+      requestOffset.value = r.nextOffset ?? null;
+    } else {
+      blocks.value = [
+        ...blocks.value,
+        ...r.data.filter(
+          (v: any) => !blocks.value.some((p) => p.userId === v.userId),
+        ),
+      ];
+      blockOffset.value = r.nextOffset ?? null;
+    }
   });
 }
 async function requestAction(id: string, accept: boolean) {
@@ -146,6 +176,16 @@ async function disconnect() {
     notice.value = "Steam disconnected. Imported library entries are retained.";
   });
 }
+async function savedAchievements() {
+  await run(async () => {
+    steamAchievements.value = (
+      await social.request(
+        "/steam-library/achievements/" + encodeURIComponent(appId.value),
+      )
+    ).data;
+    notice.value = "Showing previously saved achievements.";
+  });
+}
 async function importAchievements() {
   await run(async () => {
     steamAchievements.value = (
@@ -173,6 +213,30 @@ watch(
   },
   { immediate: true },
 );
+const dashboardChoices = [
+  { id: "stats", label: "Statistics" },
+  { id: "status", label: "Status overview" },
+  { id: "genres", label: "Genre mix" },
+  { id: "ratings", label: "Rating distribution" },
+];
+const homeChoices = [
+  { id: "popular", label: "Popular right now" },
+  { id: "rated", label: "Top rated" },
+  { id: "recent", label: "Recently released" },
+  { id: "upcoming", label: "Upcoming releases" },
+  { id: "more", label: "More to discover" },
+];
+function moveSetting(
+  key: "dashboardWidgets" | "homeSections",
+  index: number,
+  direction: number,
+) {
+  const list = draft.settings[key];
+  if (!list || index + direction < 0 || index + direction >= list.length)
+    return;
+  const [item] = list.splice(index, 1);
+  (list as string[]).splice(index + direction, 0, item);
+}
 </script>
 <template>
   <div class="page-container social-page">
@@ -250,6 +314,13 @@ watch(
             Email, private notes, journal entries and personal playtime are
             excluded from the profile.
           </p>
+          <ArtworkUpload
+            label="Upload an avatar"
+            @uploaded="draft.avatar = $event"
+          /><ArtworkUpload
+            label="Upload a banner"
+            @uploaded="draft.banner = $event"
+          />
           <h2>Your experience</h2>
           <label
             >Accent color<select v-model="draft.settings.accent">
@@ -278,13 +349,92 @@ watch(
           ><label class="check-label"
             ><input v-model="draft.settings.notifications" type="checkbox" />
             Receive new in-app notifications</label
-          ><button class="button primary" :disabled="busy">
+          >
+          <fieldset>
+            <legend>Dashboard widgets</legend>
+            <label v-for="w in dashboardChoices" :key="w.id" class="check-label"
+              ><input
+                v-model="draft.settings.dashboardWidgets"
+                type="checkbox"
+                :value="w.id"
+              />{{ w.label }}</label
+            >
+            <div
+              v-for="(id, i) in draft.settings.dashboardWidgets"
+              :key="id"
+              class="hero-actions"
+            >
+              <span>{{ dashboardChoices.find((w) => w.id === id)?.label }}</span
+              ><button
+                type="button"
+                class="button ghost"
+                :disabled="i === 0"
+                :aria-label="'Move ' + id + ' up'"
+                @click="moveSetting('dashboardWidgets', i, -1)"
+              >
+                Move up</button
+              ><button
+                type="button"
+                class="button ghost"
+                :disabled="
+                  i === (draft.settings.dashboardWidgets?.length ?? 0) - 1
+                "
+                :aria-label="'Move ' + id + ' down'"
+                @click="moveSetting('dashboardWidgets', i, 1)"
+              >
+                Move down
+              </button>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>Homepage sections</legend>
+            <label v-for="w in homeChoices" :key="w.id" class="check-label"
+              ><input
+                v-model="draft.settings.homeSections"
+                type="checkbox"
+                :value="w.id"
+              />{{ w.label }}</label
+            >
+            <div
+              v-for="(id, i) in draft.settings.homeSections"
+              :key="id"
+              class="hero-actions"
+            >
+              <span>{{ homeChoices.find((w) => w.id === id)?.label }}</span
+              ><button
+                type="button"
+                class="button ghost"
+                :disabled="i === 0"
+                :aria-label="'Move ' + id + ' up'"
+                @click="moveSetting('homeSections', i, -1)"
+              >
+                Move up</button
+              ><button
+                type="button"
+                class="button ghost"
+                :disabled="i === (draft.settings.homeSections?.length ?? 0) - 1"
+                :aria-label="'Move ' + id + ' down'"
+                @click="moveSetting('homeSections', i, 1)"
+              >
+                Move down
+              </button>
+            </div>
+          </fieldset>
+          <button class="button primary" :disabled="busy">
             {{ social.me ? "Save profile" : "Create profile" }}
           </button>
         </form>
         <div class="social-grid">
           <section class="account-panel">
             <h2>Follow requests</h2>
+            <button
+              v-if="requestOffset !== null"
+              class="button ghost"
+              :disabled="busy"
+              @click="moreManagement('requests')"
+            >
+              More follow requests
+            </button>
             <p v-if="!requests.length" class="muted">No pending requests.</p>
             <article v-for="p in requests" :key="p.userId">
               <RouterLink :to="'/u/' + p.username"
@@ -309,6 +459,14 @@ watch(
           </section>
           <section class="account-panel">
             <h2>Blocked users</h2>
+            <button
+              v-if="blockOffset !== null"
+              class="button ghost"
+              :disabled="busy"
+              @click="moreManagement('blocks')"
+            >
+              More blocked users
+            </button>
             <p v-if="!blocks.length" class="muted">No blocked users.</p>
             <article v-for="p in blocks" :key="p.userId">
               <span>{{ p.profile?.name ?? "User" }}</span
@@ -369,6 +527,14 @@ watch(
                 Import available achievements
               </button>
             </form>
+            <button
+              type="button"
+              class="button ghost"
+              :disabled="busy || !appId"
+              @click="savedAchievements"
+            >
+              View saved achievements
+            </button>
             <ul v-if="steamAchievements.length">
               <li v-for="a in steamAchievements" :key="a.apiname">
                 {{ a.name ?? a.apiname }} -
@@ -405,10 +571,17 @@ watch(
                 :max="a.target"
                 :aria-label="a.name + ' progress'"
               /><small>{{ a.progress }} / {{ a.target }}</small>
+              <p v-if="a.rarity">
+                Unlocked by {{ a.rarity.percentage }}% of
+                {{ a.rarity.population }} visible public profiles.
+              </p>
+              <p v-else class="muted">
+                Rarity unavailable until public profile data exists.
+              </p>
             </article>
           </div>
-        </section></template
-      ></template
-    >
+        </section>
+        <SocialExtras /></template
+    ></template>
   </div>
 </template>

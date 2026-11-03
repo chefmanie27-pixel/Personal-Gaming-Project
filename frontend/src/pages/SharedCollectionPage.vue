@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ArtworkUpload from "../components/ArtworkUpload.vue";
 import { computed, ref, reactive, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useAuthStore } from "../stores/auth";
@@ -24,6 +25,14 @@ const route = useRoute(),
   editing = ref(false),
   source = ref(""),
   selected = ref<string[]>([]);
+const members = ref<any[]>([]),
+  inviteName = ref(""),
+  inviteRole = ref("viewer");
+const canEdit = computed(
+  () =>
+    collection.value?.userId === auth.user?.id ||
+    collection.value?.permission === "editor",
+);
 const publicationId = ref(crypto.randomUUID());
 const draft = reactive({
   name: "",
@@ -40,6 +49,17 @@ const available = computed(() => {
   for (const e of library.entries) map.set(e.game.slug, publicGame(e.game));
   return [...map.values()];
 });
+const orderedGames = computed(() =>
+  selected.value
+    .map((slug) => available.value.find((g) => g.slug === slug))
+    .filter((g): g is PublicGame => !!g),
+);
+function moveGame(index: number, direction: number) {
+  if (index + direction < 0 || index + direction >= selected.value.length)
+    return;
+  const [slug] = selected.value.splice(index, 1);
+  selected.value.splice(index + direction, 0, slug);
+}
 function fill(c: Publication) {
   Object.assign(draft, {
     name: c.name,
@@ -66,6 +86,12 @@ async function load() {
       )
     ).data;
     fill(collection.value!);
+    if (collection.value && collection.value.userId === auth.user?.id) {
+      const r = await social.request(
+        "/social/collections/" + collection.value.id + "/members",
+      );
+      members.value = Array.isArray(r.data) ? r.data : [];
+    }
   } catch (e) {
     error.value = socialMessage(e);
   } finally {
@@ -90,9 +116,7 @@ async function save() {
       {
         ...draft,
         ...(isNew.value ? { id: publicationId.value } : {}),
-        games: available.value
-          .filter((g) => selected.value.includes(g.slug))
-          .map(publicGame),
+        games: orderedGames.value.map(publicGame),
       },
     );
     notice.value =
@@ -104,6 +128,61 @@ async function save() {
       editing.value = false;
       fill(collection.value!);
     }
+  } catch (e) {
+    error.value = socialMessage(e);
+  } finally {
+    busy.value = false;
+  }
+}
+async function invite() {
+  if (!collection.value) return;
+  busy.value = true;
+  error.value = "";
+  try {
+    await social.request(
+      "/social/collections/" + collection.value.id + "/members",
+      "POST",
+      { username: inviteName.value, role: inviteRole.value },
+    );
+    members.value = (
+      await social.request(
+        "/social/collections/" + collection.value.id + "/members",
+      )
+    ).data;
+    inviteName.value = "";
+    notice.value =
+      "Invitation sent. The player must accept before gaining access.";
+  } catch (e) {
+    error.value = socialMessage(e);
+  } finally {
+    busy.value = false;
+  }
+}
+async function removeMember(id: string) {
+  if (!collection.value) return;
+  busy.value = true;
+  try {
+    await social.request(
+      "/social/collections/" + collection.value.id + "/members/" + id,
+      "DELETE",
+    );
+    members.value = members.value.filter((m) => m.userId !== id);
+  } catch (e) {
+    error.value = socialMessage(e);
+  } finally {
+    busy.value = false;
+  }
+}
+async function feature() {
+  if (!collection.value) return;
+  busy.value = true;
+  try {
+    await social.request(
+      "/social/collections/" + collection.value.id + "/feature",
+      "POST",
+      { featured: !collection.value.featured },
+    );
+    await load();
   } catch (e) {
     error.value = socialMessage(e);
   } finally {
@@ -201,10 +280,16 @@ watch(
             maxlength="1024"
             type="url"
             placeholder="https://..." /></label
-        ><label
+        ><ArtworkUpload
+          label="Upload collection artwork"
+          @uploaded="draft.cover = $event"
+        /><label
           >Genre or theme<input v-model="draft.theme" maxlength="80" /></label
         ><label
-          >Visibility<select v-model="draft.visibility">
+          >Visibility<select
+            v-model="draft.visibility"
+            :disabled="!isNew && collection?.permission === 'editor'"
+          >
             <option value="private">Private - only you</option>
             <option value="public">Share with profile viewers</option>
           </select></label
@@ -223,6 +308,31 @@ watch(
             Add games to your library first, or save an empty collection.
           </p>
         </fieldset>
+        <section aria-label="Collection game order">
+          <h2>Game order</h2>
+          <ol>
+            <li v-for="(g, i) in orderedGames" :key="g.slug">
+              <span>{{ g.title }}</span
+              ><button
+                class="button ghost"
+                type="button"
+                :aria-label="'Move ' + g.title + ' up'"
+                :disabled="i === 0"
+                @click="moveGame(i, -1)"
+              >
+                Move up</button
+              ><button
+                class="button ghost"
+                type="button"
+                :aria-label="'Move ' + g.title + ' down'"
+                :disabled="i === orderedGames.length - 1"
+                @click="moveGame(i, 1)"
+              >
+                Move down
+              </button>
+            </li>
+          </ol>
+        </section>
         <div class="hero-actions">
           <button class="button primary" :disabled="busy">
             Save collection</button
@@ -255,7 +365,7 @@ watch(
           >By {{ collection.author.name }}</RouterLink
         >
         <div class="hero-actions">
-          <template v-if="collection.userId === auth.user?.id"
+          <template v-if="canEdit"
             ><button
               class="button primary"
               @click="
@@ -264,7 +374,12 @@ watch(
               "
             >
               Edit collection</button
-            ><button class="button ghost" :disabled="busy" @click="remove">
+            ><button
+              v-if="collection.userId === auth.user?.id"
+              class="button ghost"
+              :disabled="busy"
+              @click="remove"
+            >
               Delete collection
             </button></template
           ><button
@@ -279,6 +394,55 @@ watch(
             }}
           </button>
         </div>
+        <button
+          v-if="auth.user?.role === 'ADMIN'"
+          class="button ghost"
+          :disabled="busy"
+          @click="feature"
+        >
+          {{
+            collection.featured ? "Remove from featured" : "Feature collection"
+          }}
+        </button>
+        <section
+          v-if="collection.userId === auth.user?.id"
+          class="account-panel"
+        >
+          <h2>Collaborators</h2>
+          <p>
+            Viewers can open this collection. Editors can change its content,
+            but cannot change visibility or manage access.
+          </p>
+          <form class="social-toolbar" @submit.prevent="invite">
+            <label
+              >Player username<input
+                v-model="inviteName"
+                maxlength="30"
+                required /></label
+            ><label
+              >Permission<select v-model="inviteRole">
+                <option value="viewer">Viewer</option>
+                <option value="editor">Editor</option>
+              </select></label
+            ><button class="button primary" :disabled="busy">
+              Invite player
+            </button>
+          </form>
+          <article v-for="m in members" :key="m.userId">
+            <p>
+              {{ m.profile?.name ?? "Player" }} / {{ m.role }} /
+              {{ m.accepted ? "Accepted" : "Pending" }}
+            </p>
+            <button
+              class="button ghost"
+              :disabled="busy"
+              @click="removeMember(m.userId)"
+            >
+              Remove access
+            </button>
+          </article>
+          <p v-if="!members.length">No collaborators yet.</p>
+        </section>
         <p>
           Share this page's URL to share the collection. Profile privacy still
           applies.

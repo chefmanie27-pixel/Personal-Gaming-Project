@@ -54,6 +54,50 @@ export const databaseLibrary: LibraryRepository = {
       })
     ).map(output);
   },
+  async bulkStatus(userId, slugs, status) {
+    return prisma.$transaction(
+      async (db) => {
+        const owned = await db.libraryEntry.findMany({
+          where: { userId, slug: { in: slugs } },
+        });
+        if (owned.length !== slugs.length) return null;
+        await db.libraryEntry.updateMany({
+          where: { userId, slug: { in: slugs } },
+          data: { status },
+        });
+        const profile = await db.socialProfile.findUnique({
+          where: { userId },
+        });
+        if (profile) {
+          if (profile.shareLibrary) {
+            const events = owned.flatMap((row) => {
+              const title = (row.game as { title?: string }).title ?? row.slug;
+              return [
+                { userId, kind: "added", entityId: row.slug, title },
+                ...(status === "Completed"
+                  ? [{ userId, kind: "completed", entityId: row.slug, title }]
+                  : []),
+                ...(row.favorite
+                  ? [{ userId, kind: "favorite", entityId: row.slug, title }]
+                  : []),
+              ];
+            });
+            await db.socialActivity.createMany({
+              data: events,
+              skipDuplicates: true,
+            });
+          }
+          await awardAchievements(db, userId);
+        }
+        return (
+          await db.libraryEntry.findMany({
+            where: { userId, slug: { in: slugs } },
+          })
+        ).map(output);
+      },
+      { timeout: 20000, isolationLevel: "Serializable" },
+    );
+  },
   async add(userId, entry) {
     return prisma.$transaction(async (db) => {
       const saved = output(

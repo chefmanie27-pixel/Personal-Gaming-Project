@@ -64,6 +64,17 @@ async function save() {
     <p class="muted">
       {{ workspace.scope }} Profile information remains private.
     </p>
+    <aside class="account-panel">
+      <h2>Two kinds of preferences</h2>
+      <p>
+        Your genre preferences, recommendation feedback and personal notes are
+        private. Public profile sharing, appearance and connected accounts are
+        managed in the Social Studio.
+      </p>
+      <RouterLink class="button ghost" to="/social/studio"
+        >Open Social Studio</RouterLink
+      >
+    </aside>
     <form
       class="workspace-form account-panel"
       @submit.prevent="save"
@@ -118,5 +129,33 @@ async function save() {
     <RouterLink class="button ghost" to="/account"
       >Account and alerts</RouterLink
     >
+    <section class="account-panel">
+      <h2>Recommendation feedback</h2>
+      <p>
+        {{
+          Object.keys(workspace.data.preferences.recommendationFeedback ?? {})
+            .length
+        }}
+        saved choices. Feedback affects your discovery suggestions and stays
+        private.
+      </p>
+      <button
+        class="button ghost"
+        :disabled="
+          !workspace.ready ||
+          workspace.busy ||
+          !!workspace.error ||
+          !Object.keys(workspace.data.preferences.recommendationFeedback ?? {})
+            .length
+        "
+        @click="
+          workspace.change((d) => {
+            d.preferences.recommendationFeedback = {};
+          })
+        "
+      >
+        Reset recommendation feedback
+      </button>
+    </section>
   </div>
 </template>

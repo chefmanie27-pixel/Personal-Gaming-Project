@@ -44,3 +44,16 @@ Production build/type checks pass in the implementation runs. Expanded browser h
 - npm audit: 0 known vulnerabilities. Dependencies added: none.
 - Running local API: health 200, public social user listing 200, unauthenticated social/me 401, unauthenticated steam-library 401. No live account content printed.
 - Live Steam import remains unverified without an authorized Steam account/key; explicit fixture-based behavior and MySQL persistence passed. No production deployment, email/push delivery or destructive migration performed.
+
+## Completion follow-up - 3 November 2026
+
+Implemented collection invitations/roles, safe artwork uploads, dashboard/home ordering, featured collections, public-library player suggestions, real rarity, username aliases, management pagination and saved Steam achievement retrieval. The prior deferred-local-feature list is superseded. See [completion report](GAMEVAULT_2_0_COMPLETION.md). External Steam credentials and delivery providers remain unconfigured; no external delivery/deployment is claimed.
+
+## Final follow-up results
+
+- Backend with all MySQL fixtures enabled: 69 passed, zero failures/skips. Frontend: 17 passed. Total: 86 passing tests.
+- Full browser regression suite passed, including persistent dashboard widget order/visibility and homepage section choices/ranking after navigation, plus prior account/social/journal/deals/mobile checks. Browser fixtures simulate separate user interactions and wait for account preferences to load.
+- Production build and type checks passed; final backend output rebuilt after invitation-notification renewal handling. Formatting and whitespace checks passed.
+- Prisma schema validated; all eight local migrations applied with no pending migration. No destructive migration or production deployment performed.
+- npm audit after adding Sharp: zero known vulnerabilities. New direct dependency: sharp ^0.35.5.
+- External blockers: live Steam acceptance requires an authorized account/key; actual email/push delivery remains unconfigured. These do not affect local in-app invitations, notifications or the completed social features.

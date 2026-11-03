@@ -26,6 +26,7 @@ export const journalQuerySchema = z.object({
 });
 export type JournalQuery = z.infer<typeof journalQuerySchema>;
 export interface JournalSummary {
+  days?: Record<string, { minutes: number; sessions: number }>;
   minutes: number;
   monthly: number[];
   genres: [string, number][];

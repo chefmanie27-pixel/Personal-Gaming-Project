@@ -95,6 +95,32 @@ steamLibrary.delete("/", async (req: AuthRequest, res, next) => {
     next(e);
   }
 });
+steamLibrary.get(
+  "/achievements/:appId",
+  async (req: AuthRequest, res, next) => {
+    try {
+      const parsed = z.coerce
+        .number()
+        .int()
+        .positive()
+        .max(2147483647)
+        .safeParse(req.params.appId);
+      if (!parsed.success)
+        return res.status(400).json({ error: "Invalid Steam app ID." });
+      const row = await prisma.steamGameSnapshot.findUnique({
+        where: { userId_appId: { userId: req.user!.id, appId: parsed.data } },
+        select: { achievements: true, fetchedAt: true },
+      });
+      if (!row || !row.achievements)
+        return res.status(404).json({
+          error: "No saved achievements for this game. Import them first.",
+        });
+      res.json({ data: row.achievements, fetchedAt: row.fetchedAt });
+    } catch (e) {
+      next(e);
+    }
+  },
+);
 steamLibrary.post(
   "/sync",
   authRateLimit(5, 60000),

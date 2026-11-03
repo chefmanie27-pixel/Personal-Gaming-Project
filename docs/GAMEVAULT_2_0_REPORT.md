@@ -1,3 +1,5 @@
+> Updated 3 November 2026: see [completion follow-up](GAMEVAULT_2_0_COMPLETION.md) for collaboration, uploads, ordering, featured discovery, suggestions, rarity, aliases and pagination. Omitted-local-feature statements below describe the initial social release.
+
 # GameVault 2.0 implementation report
 
 ## What changed

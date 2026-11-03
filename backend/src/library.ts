@@ -69,6 +69,11 @@ export type SavedEntry = Journal & {
 };
 export interface LibraryRepository {
   list(userId: string): Promise<SavedEntry[]>;
+  bulkStatus?(
+    userId: string,
+    slugs: string[],
+    status: Journal["status"],
+  ): Promise<SavedEntry[] | null>;
   add(userId: string, entry: SavedEntry): Promise<SavedEntry>;
   update(
     userId: string,
@@ -87,6 +92,46 @@ export function createLibraryRouter(repository: LibraryRepository) {
       res.json({ data: await repository.list(req.user!.id) });
     } catch (error) {
       next(error);
+    }
+  });
+  router.post("/bulk-status", async (req: AuthRequest, res, next) => {
+    const parsed = z
+      .object({
+        slugs: z
+          .array(slug)
+          .min(1)
+          .max(20)
+          .refine((v) => new Set(v).size === v.length),
+        status: journalSchema.shape.status,
+      })
+      .strict()
+      .safeParse(req.body);
+    if (!parsed.success)
+      return res
+        .status(400)
+        .json({
+          error: "Choose 1-20 distinct owned games and a valid status.",
+        });
+    if (!repository.bulkStatus)
+      return res
+        .status(503)
+        .json({ error: "Bulk updates are unavailable on this server." });
+    try {
+      const rows = await repository.bulkStatus(
+        req.user!.id,
+        parsed.data.slugs,
+        parsed.data.status,
+      );
+      return rows
+        ? res.json({ data: rows })
+        : res
+            .status(404)
+            .json({
+              error:
+                "One or more games are missing from your library. No statuses were changed.",
+            });
+    } catch (e) {
+      next(e);
     }
   });
   router.post("/import", async (req: AuthRequest, res, next) => {

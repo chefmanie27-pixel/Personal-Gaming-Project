@@ -121,6 +121,7 @@ async function action(
     else {
       await social.request("/social/reviews/" + r.id + "/report", "POST", {
         reason,
+        category: reportCategory.value,
       });
       notice.value = "Report submitted for administrator review.";
     }
@@ -131,6 +132,7 @@ async function action(
     busy.value = false;
   }
 }
+const reportCategory = ref("other");
 const reportId = ref(""),
   reportReason = ref("");
 watch(
@@ -271,6 +273,13 @@ watch(
         "
       >
         <label
+          >Category<select v-model="reportCategory">
+            <option value="spam">Spam</option>
+            <option value="harassment">Harassment</option>
+            <option value="spoilers">Unmarked spoilers</option>
+            <option value="other">Other</option>
+          </select></label
+        ><label
           >Reason for reporting<textarea
             v-model="reportReason"
             minlength="3"

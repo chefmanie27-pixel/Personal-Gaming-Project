@@ -47,3 +47,17 @@ export async function importLibraryEntries(
     { headers: headers(token) },
   );
 }
+
+export async function bulkLibraryStatus(
+  token: string,
+  slugs: string[],
+  status: LibraryEntry["status"],
+): Promise<LibraryEntry[]> {
+  return (
+    await libraryClient.post(
+      "/library/bulk-status",
+      { slugs, status },
+      { headers: headers(token) },
+    )
+  ).data.data;
+}

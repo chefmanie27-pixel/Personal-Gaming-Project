@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { useLibraryStore, type LibraryEntry } from "../stores/library";
+import {
+  statuses,
+  useLibraryStore,
+  type LibraryEntry,
+} from "../stores/library";
 import { useWorkspaceStore } from "../stores/workspace";
 import { randomEntry } from "../utils/platform";
 import GameCard from "../components/GameCard.vue";
@@ -10,11 +14,17 @@ const status = ref("backlog"),
   collection = ref(""),
   genre = ref(""),
   platform = ref("");
+const priority = ref("");
 const picked = ref<LibraryEntry>();
 const pool = computed(() =>
   library.entries.filter(
     (e) =>
-      (status.value !== "backlog" || e.status === "Want to Play") &&
+      (status.value === "all" ||
+        (status.value === "backlog"
+          ? e.status === "Want to Play"
+          : e.status === status.value)) &&
+      (!priority.value ||
+        workspace.meta(e.game.slug).priority === priority.value) &&
       (!collection.value ||
         workspace.meta(e.game.slug).collectionIds.includes(collection.value)) &&
       (!genre.value || e.game.genres.includes(genre.value)) &&
@@ -27,7 +37,10 @@ const genres = computed(() =>
 const platforms = computed(() =>
   [...new Set(library.entries.flatMap((e) => e.game.platforms))].sort(),
 );
-watch([status, collection, genre, platform], () => (picked.value = undefined));
+watch(
+  [status, collection, genre, platform, priority],
+  () => (picked.value = undefined),
+);
 function pick() {
   picked.value = randomEntry(pool.value, picked.value?.game.slug);
 }
@@ -43,7 +56,10 @@ function pick() {
     <div class="filters">
       <select v-model="status" aria-label="Picker scope">
         <option value="backlog">Backlog only</option>
-        <option value="all">Entire library</option></select
+        <option value="all">Entire library</option>
+        <option v-for="s in statuses" :key="s" :value="s">
+          {{ s }}
+        </option></select
       ><select v-model="collection" aria-label="Picker collection">
         <option value="">Every collection</option>
         <option
@@ -61,7 +77,17 @@ function pick() {
         <option v-for="p in platforms" :key="p">{{ p }}</option>
       </select>
     </div>
-    <p role="status">{{ pool.length }} matching games</p>
+    <label
+      >Priority<select v-model="priority">
+        <option value="">Every priority</option>
+        <option>High</option>
+        <option>Normal</option>
+        <option>Low</option>
+      </select></label
+    >
+    <p role="status">
+      {{ pool.length }} matching games from your saved library
+    </p>
     <button class="button primary" :disabled="!pool.length" @click="pick">
       {{ picked ? "Pick again" : "Pick a game" }}
     </button>

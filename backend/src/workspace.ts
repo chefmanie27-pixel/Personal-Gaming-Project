@@ -1,3 +1,4 @@
+import { priceAlertRulesSchema } from "./priceRules.js";
 import { Router } from "express";
 import { z } from "zod";
 import { requireAuth, type AuthRequest } from "./auth.js";
@@ -31,12 +32,60 @@ export const workspaceSchema = z
       .object({
         genres: z.array(z.string().min(1).max(100)).max(30),
         platforms: z.array(z.string().min(1).max(100)).max(30),
+        priceAlertRules: priceAlertRulesSchema.optional(),
+        recommendationFeedback: z
+          .record(
+            slug,
+            z
+              .object({
+                choice: z.enum(["interested", "not-interested", "less-like"]),
+                genres: z.array(z.string().max(100)).max(10),
+                title: z.string().max(500),
+                at: z.string().datetime(),
+              })
+              .strict(),
+          )
+          .refine(
+            (v) => Object.keys(v).length <= 500,
+            "Keep at most 500 feedback entries",
+          )
+          .optional(),
         libraryView: z.enum(["grid", "list"]).optional(),
         librarySort: z
           .enum(["added", "title", "rating", "priority"])
           .optional(),
       })
       .default({ genres: [], platforms: [] }),
+    goals: z
+      .array(
+        z
+          .object({
+            id,
+            challengeKey: z
+              .enum(["monthly-three", "session-ten", "time-300"])
+              .optional(),
+            title: z.string().trim().min(1).max(80),
+            kind: z.enum(["completed", "sessions", "minutes"]),
+            target: z.number().int().min(1).max(1000000),
+            start: dateOnly,
+            end: dateOnly,
+          })
+          .strict()
+          .refine(
+            (g) =>
+              g.start <= g.end &&
+              g.start.slice(0, 4) === g.end.slice(0, 4) &&
+              Number(g.start.slice(0, 4)) >= 1970 &&
+              Number(g.start.slice(0, 4)) <= 2100,
+            "Choose an ordered period within one calendar year",
+          ),
+      )
+      .max(50)
+      .refine(
+        (v) => new Set(v.map((g) => g.id)).size === v.length,
+        "Duplicate goal IDs",
+      )
+      .optional(),
     collections: z
       .array(z.object({ id, name: z.string().trim().min(1).max(80) }))
       .max(100)
@@ -46,6 +95,7 @@ export const workspaceSchema = z
         slug,
         z.object({
           completedAt: dateOnly.nullable().default(null),
+          targetDate: dateOnly.nullable().optional(),
           priority: z.enum(["Low", "Normal", "High"]).default("Normal"),
           collectionIds: z.array(id).max(100).default([]),
         }),

@@ -1,12 +1,15 @@
 <script setup lang="ts">
+import axios from "axios";
+import GameDiscussions from "../components/GameDiscussions.vue";
 import CommunityReviews from "../components/CommunityReviews.vue";
 import GameMedia from "../components/GameMedia.vue";
 import LibraryControls from "../components/LibraryControls.vue";
 import RelatedContent from "../components/RelatedContent.vue";
 import SystemRequirements from "../components/SystemRequirements.vue";
 import GameCover from "../components/GameCover.vue";
-import { onMounted, ref } from "vue";
+import { ref, watch, onBeforeUnmount } from "vue";
 import { useRoute } from "vue-router";
+import { socialClient, socialMessage } from "../stores/social";
 import { fetchGame } from "../services/api";
 import type { Game } from "../types";
 import { useAuthStore } from "../stores/auth";
@@ -33,27 +36,89 @@ const auth = useAuthStore();
 const game = ref<Game>();
 const loading = ref(true);
 const error = ref("");
+let gameRevision = 0;
 async function loadGame() {
+  const revision = ++gameRevision;
   loading.value = true;
   try {
     error.value = "";
-    game.value = await fetchGame(String(route.params.slug));
+    const result = await fetchGame(String(route.params.slug));
+    if (revision !== gameRevision) return;
+    game.value = result;
   } catch {
+    if (revision !== gameRevision) return;
     error.value = "Unable to load game data. Please try again shortly.";
   } finally {
-    loading.value = false;
+    if (revision === gameRevision) loading.value = false;
   }
 }
-onMounted(loadGame);
+watch(
+  () => route.params.slug,
+  () => void loadGame(),
+  { immediate: true },
+);
+onBeforeUnmount(() => {
+  gameRevision++;
+});
 const formatPrice = (value: number | null) =>
   value === null ? "Price unavailable" : `R${value.toFixed(2)}`;
 const wishlistMessage = ref("");
 const targetPrice = ref<number>();
-const alertMessage = ref("");
+const savingAlert = ref(false);
+const alertMessage = ref(""),
+  observationMessage = ref(""),
+  observing = ref(false),
+  historyRevision = ref(0);
+async function saveObservation() {
+  if (!auth.token || !game.value) {
+    observationMessage.value = "Sign in to save a source-backed observation.";
+    return;
+  }
+  observing.value = true;
+  const token = auth.token;
+  try {
+    const r = await socialClient.post(
+      "/games/" + game.value.slug + "/observe",
+      {},
+      { headers: { Authorization: "Bearer " + token } },
+    );
+    if (auth.token !== token) return;
+    observationMessage.value = r.data.data.priceAvailable
+      ? r.data.data.recorded
+        ? "Regional store observation saved."
+        : "This cached observation is already stored."
+      : "Game metadata saved, but its current price is missing or stale; no price observation was created.";
+    historyRevision.value++;
+  } catch (e) {
+    if (auth.token === token) observationMessage.value = socialMessage(e);
+  } finally {
+    observing.value = false;
+  }
+}
+
+async function ensureCanonical(token: string) {
+  if (!game.value || /^(rawg|playstation)-/.test(game.value.slug)) return;
+  try {
+    await socialClient.post(
+      "/games/" + game.value.slug + "/observe",
+      {},
+      { headers: { Authorization: "Bearer " + token } },
+    );
+  } catch (e) {
+    if (axios.isAxiosError(e) && e.response?.status === 409) throw e;
+  }
+}
 async function saveToWishlist() {
   wishlistMessage.value = "";
+  const token = auth.token;
+  if (!token) {
+    wishlistMessage.value = "Sign in to save games.";
+    return;
+  }
   try {
     error.value = "";
+    await ensureCanonical(token);
+    if (auth.token !== token) return;
     await auth.addWishlist(game.value!.slug);
     wishlistMessage.value = "Saved to your wishlist.";
   } catch {
@@ -63,18 +128,40 @@ async function saveToWishlist() {
   }
 }
 async function setPriceAlert() {
+  if (savingAlert.value) return;
   alertMessage.value = "";
-  if (!auth.token || !targetPrice.value) {
-    alertMessage.value = "Sign in and enter a target price first.";
+  const token = auth.token,
+    slug = game.value?.slug,
+    target = targetPrice.value;
+  if (
+    !token ||
+    !slug ||
+    typeof target !== "number" ||
+    !Number.isFinite(target) ||
+    target <= 0 ||
+    target > 9999999999.99 ||
+    !/^\d+(?:\.\d{1,2})?$/.test(String(target))
+  ) {
+    alertMessage.value =
+      "Sign in and enter a positive target with at most two decimal places.";
     return;
   }
+  savingAlert.value = true;
+  const current = () => auth.token === token && game.value?.slug === slug;
   try {
-    error.value = "";
-    await createAlert(auth.token, game.value!.slug, targetPrice.value);
-    alertMessage.value = "Price alert saved.";
-  } catch {
-    alertMessage.value =
-      "No regional price listing is available for this game yet.";
+    await ensureCanonical(token);
+    if (!current()) return;
+    const result = await createAlert(token, slug, target);
+    if (!current()) return;
+    alertMessage.value = result.existing
+      ? result.active
+        ? "This price alert is already saved."
+        : "This alert already exists and is paused. Resume it in your account."
+      : "Price alert saved.";
+  } catch (e) {
+    if (current()) alertMessage.value = socialMessage(e);
+  } finally {
+    savingAlert.value = false;
   }
 }
 </script>
@@ -141,7 +228,11 @@ async function setPriceAlert() {
           </div>
         </section>
         <PriceHistoryChart
-          v-if="game.slug.startsWith('steam-')"
+          v-if="
+            !game.slug.startsWith('rawg-') &&
+            !game.slug.startsWith('playstation-')
+          "
+          :key="historyRevision"
           :slug="game.slug"
         />
         <p v-else class="muted">
@@ -187,7 +278,29 @@ async function setPriceAlert() {
           {{ formatPrice(game.price) }}
           <s v-if="game.originalPrice">{{ formatPrice(game.originalPrice) }}</s>
         </div>
-        <p class="muted">on {{ game.store }}</p>
+        <p class="muted">on {{ game.store }} / South Africa / ZAR</p>
+        <p class="muted">
+          {{
+            game.price === null
+              ? "No qualifying regional quote"
+              : "Store response quote"
+          }}<template v-if="game.observedAt">
+            checked {{ new Date(game.observedAt).toLocaleString() }}</template
+          >. Verify checkout price and availability at the store.
+        </p>
+        <button
+          v-if="!game.slug.startsWith('rawg-')"
+          class="button ghost full"
+          :disabled="observing"
+          @click="saveObservation"
+        >
+          {{
+            observing
+              ? "Saving observation..."
+              : "Save current store observation"
+          }}
+        </button>
+        <p v-if="observationMessage" role="status">{{ observationMessage }}</p>
         <a
           v-if="game.storeUrl"
           :href="game.storeUrl"
@@ -220,11 +333,16 @@ async function setPriceAlert() {
             <input
               v-model.number="targetPrice"
               type="number"
-              min="1"
-              step="1"
+              min="0.01"
+              step="0.01"
+              max="9999999999.99"
               placeholder="R300" /></label
-          ><button class="button ghost full" @click="setPriceAlert">
-            Set price alert
+          ><button
+            class="button ghost full"
+            :disabled="savingAlert"
+            @click="setPriceAlert"
+          >
+            {{ savingAlert ? "Saving alert..." : "Set price alert" }}
           </button>
           <p v-if="alertMessage" class="wishlist-message">{{ alertMessage }}</p>
         </div>
@@ -245,8 +363,11 @@ async function setPriceAlert() {
         </p>
       </aside>
     </div>
-  <CommunityReviews v-if="game" :game="game" />
-</template>
+    <CommunityReviews v-if="game" :game="game" /><GameDiscussions
+      v-if="game"
+      :game="game"
+    />
+  </template>
   <div v-else-if="!error" class="empty-state">
     <h2>Game not found</h2>
     <RouterLink to="/catalogue" class="button primary"

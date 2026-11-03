@@ -16,6 +16,14 @@ const schema = z.object({
     (v) => (v === "" ? undefined : v),
     z.string().min(1).optional(),
   ),
+  DISCUSSIONS_ENABLED: z
+    .enum(["0", "1"])
+    .default("0")
+    .transform((v) => v === "1"),
+  DURABLE_ALERTS_ENABLED: z
+    .enum(["0", "1"])
+    .default("0")
+    .transform((v) => v === "1"),
   RAWG_API_KEY: z.string().optional(),
 });
 

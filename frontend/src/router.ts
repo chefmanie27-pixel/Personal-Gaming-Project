@@ -10,10 +10,27 @@ const AccountPage = () => import("./pages/AccountPage.vue");
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
-    {path:"/community",component:()=>import("./pages/CommunityPage.vue")},
-    {path:"/u/:username",component:()=>import("./pages/SocialProfilePage.vue")},
-    {path:"/social/studio",component:()=>import("./pages/SocialStudioPage.vue")},
-    {path:"/community/collections/:id",component:()=>import("./pages/SharedCollectionPage.vue")},
+    {
+      path: "/goals",
+      name: "goals",
+      component: () => import("./pages/GoalsPage.vue"),
+    },
+    {
+      path: "/community",
+      component: () => import("./pages/CommunityPage.vue"),
+    },
+    {
+      path: "/u/:username",
+      component: () => import("./pages/SocialProfilePage.vue"),
+    },
+    {
+      path: "/social/studio",
+      component: () => import("./pages/SocialStudioPage.vue"),
+    },
+    {
+      path: "/community/collections/:id",
+      component: () => import("./pages/SharedCollectionPage.vue"),
+    },
     {
       path: "/backlog",
       name: "backlog",

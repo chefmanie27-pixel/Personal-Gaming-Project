@@ -87,10 +87,24 @@ test("workspace API isolates users, requires authentication and rejects stale sa
     await req("alice");
     const data = workspaceSchema.parse({
       profile: { name: "Alice", bio: "Private" },
+      preferences: {
+        genres: [],
+        platforms: [],
+        recommendationFeedback: {
+          "steam-1": {
+            choice: "interested",
+            genres: ["RPG"],
+            title: "Private preference",
+            at: "2026-11-03T10:00:00.000Z",
+          },
+        },
+      },
     });
     assert.equal((await req("alice", { version: 0, data })).status, 200);
     assert.equal((await req("alice", { version: 0, data })).status, 409);
-    assert.equal((await (await req("bob")).json()).data.profile.name, "");
+    const bob = (await (await req("bob")).json()).data;
+    assert.equal(bob.profile.name, "");
+    assert.equal(bob.preferences.recommendationFeedback, undefined);
     await fetch(base + "/limited", { method: "POST" });
     await fetch(base + "/limited", { method: "POST" });
     const blocked = await fetch(base + "/limited", { method: "POST" });
@@ -134,4 +148,76 @@ test("production configuration rejects development defaults and accepts explicit
     windowsHide: true,
   });
   assert.equal(accepted.status, 0, accepted.stderr);
+});
+
+test("recommendation feedback validates bounded private choices without granting ownership", () => {
+  const valid = {
+    preferences: {
+      genres: [],
+      platforms: [],
+      recommendationFeedback: {
+        "steam-1": {
+          choice: "less-like",
+          genres: ["RPG"],
+          title: "One",
+          at: "2026-11-03T10:00:00.000Z",
+        },
+      },
+    },
+  };
+  assert.equal(workspaceSchema.safeParse(valid).success, true);
+  assert.equal(
+    workspaceSchema.safeParse({
+      preferences: {
+        ...valid.preferences,
+        recommendationFeedback: {
+          "steam-1": {
+            ...valid.preferences.recommendationFeedback["steam-1"],
+            userId: "other",
+          },
+        },
+      },
+    }).success,
+    false,
+  );
+  assert.equal(
+    workspaceSchema.safeParse({
+      preferences: {
+        ...valid.preferences,
+        recommendationFeedback: Object.fromEntries(
+          Array.from({ length: 501 }, (_, i) => [
+            "steam-" + i,
+            valid.preferences.recommendationFeedback["steam-1"],
+          ]),
+        ),
+      },
+    }).success,
+    false,
+  );
+});
+
+test("private goals and target dates validate actual dates, order and duplicate IDs", () => {
+  const goal = {
+    id: "36ea855e-d323-4a28-8490-3fe029a9f14d",
+    title: "Finish three",
+    kind: "completed",
+    target: 3,
+    start: "2026-01-01",
+    end: "2026-12-31",
+  };
+  assert.equal(workspaceSchema.safeParse({ goals: [goal] }).success, true);
+  for (const goals of [
+    [goal, goal],
+    [{ ...goal, target: 0 }],
+    [{ ...goal, start: "2026-02-30" }],
+    [{ ...goal, end: "2025-12-31" }],
+    [{ ...goal, end: "2027-01-01" }],
+  ])
+    assert.equal(workspaceSchema.safeParse({ goals }).success, false);
+  assert.equal(
+    workspaceSchema.safeParse({
+      metadata: { "steam-1": { targetDate: "2026-02-30" } },
+    }).success,
+    false,
+  );
 });

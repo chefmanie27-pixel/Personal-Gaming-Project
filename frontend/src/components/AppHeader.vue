@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import AuthDialog from "./AuthDialog.vue";
 import { useAuthStore } from "../stores/auth";
@@ -41,7 +41,15 @@ function keydown(e: KeyboardEvent) {
     searchInput.value?.focus();
   }
   if (e.key === "Escape") {
-    open.value = false;
+    const active = document.activeElement as HTMLElement | null,
+      details = active?.closest("details");
+    if (details?.open) {
+      details.open = false;
+      details.querySelector("summary")?.focus();
+    } else {
+      open.value = false;
+      document.querySelector<HTMLButtonElement>(".menu-toggle")?.focus();
+    }
   }
 }
 watch(
@@ -55,27 +63,78 @@ watch(
 );
 onMounted(() => window.addEventListener("keydown", keydown));
 onBeforeUnmount(() => window.removeEventListener("keydown", keydown));
-const links = [
-  { to: "/", label: "Home" },
-  { to: "/catalogue", label: "Discover" },
-  { to: "/library", label: "My Library" },
-  { to: "/deals", label: "Deals" },
+const groups = [
+  {
+    label: "Discover",
+    links: [
+      { to: "/", label: "Home" },
+      { to: "/catalogue", label: "Catalogue" },
+      { to: "/deals", label: "Deals" },
+      { to: "/subscriptions", label: "Subscriptions" },
+      { to: "/upcoming", label: "Upcoming releases" },
+      { to: "/compare", label: "Compare games" },
+    ],
+  },
+  {
+    label: "My Games",
+    links: [
+      { to: "/library", label: "My Library" },
+      { to: "/backlog", label: "Backlog" },
+      { to: "/favorites", label: "Favorites" },
+      { to: "/collections", label: "Private collections" },
+      { to: "/journal", label: "Journal" },
+      { to: "/goals", label: "Goals and activity" },
+      { to: "/dashboard", label: "Dashboard" },
+      { to: "/wrapped", label: "Gaming Wrapped" },
+      { to: "/play-next", label: "Play Next" },
+    ],
+  },
+  {
+    label: "Community",
+    links: [
+      { to: "/community", label: "Discover feed" },
+      { to: "/community?tab=Following", label: "Following feed" },
+      { to: "/community?tab=People", label: "Players" },
+      { to: "/community?tab=Reviews", label: "Reviews" },
+      { to: "/community?tab=Collections", label: "Shared collections" },
+      { to: "/community?tab=Notifications", label: "Notifications" },
+    ],
+  },
+  {
+    label: "Account",
+    links: [
+      { to: "/social/studio", label: "Social Studio and connections" },
+      { to: "/preferences", label: "Private preferences" },
+      { to: "/account", label: "Price alerts" },
+    ],
+  },
 ];
-const moreLinks = [
-  { to: "/community", label: "Community" },
-  { to: "/social/studio", label: "Social profile studio" },
-  { to: "/backlog", label: "Backlog" },
-  { to: "/journal", label: "Journal" },
-  { to: "/collections", label: "Collections" },
-  { to: "/compare", label: "Compare" },
-  { to: "/upcoming", label: "Upcoming releases" },
-  { to: "/play-next", label: "What to play next" },
-  { to: "/dashboard", label: "Dashboard" },
-  { to: "/wrapped", label: "Gaming Wrapped" },
-  { to: "/favorites", label: "Favorites" },
-  { to: "/subscriptions", label: "Subscriptions" },
-  { to: "/preferences", label: "Profile and preferences" },
-];
+function activeLink(to: string) {
+  const [path, query] = to.split("?");
+  return (
+    route.path === path &&
+    (!query
+      ? path !== "/community" ||
+        !route.query.tab ||
+        route.query.tab === "Discover feed"
+      : route.query.tab === new URLSearchParams(query).get("tab"))
+  );
+}
+function toggleGroup(e: Event) {
+  const current = e.currentTarget as HTMLDetailsElement;
+  if (current.open)
+    document
+      .querySelectorAll<HTMLDetailsElement>("details.nav-more")
+      .forEach((d) => {
+        if (d !== current) d.open = false;
+      });
+}
+async function showNavigation() {
+  open.value = true;
+  window.scrollTo({ top: 0, behavior: "instant" });
+  await nextTick();
+  document.querySelector<HTMLElement>("#primary-nav summary")?.focus();
+}
 </script>
 <template>
   <a href="#main-content" class="skip-link">Skip to content</a>
@@ -97,15 +156,29 @@ const moreLinks = [
       :class="{ 'is-open': open }"
       aria-label="Main navigation"
     >
-      <RouterLink v-for="link in links" :key="link.to" :to="link.to">{{
-        link.label
-      }}</RouterLink>
-      <details class="nav-more">
-        <summary>Play &amp; track</summary>
-        <div>
-          <RouterLink v-for="link in moreLinks" :key="link.to" :to="link.to">{{
-            link.label
-          }}</RouterLink>
+      <details
+        v-for="group in groups"
+        :key="group.label"
+        class="nav-more"
+        :class="{
+          'group-active': group.links.some((link) => activeLink(link.to)),
+        }"
+        @toggle="toggleGroup"
+      >
+        <summary>{{ group.label }}</summary>
+        <div :aria-label="group.label">
+          <RouterLink
+            v-for="link in group.links"
+            :key="link.to"
+            :to="link.to"
+            :class="{ 'nav-selected': activeLink(link.to) }"
+            :aria-current="activeLink(link.to) ? 'page' : undefined"
+            >{{ link.label }}</RouterLink
+          ><RouterLink
+            v-if="group.label === 'Account' && social.me"
+            :to="'/u/' + social.me.username"
+            >View my profile</RouterLink
+          >
         </div>
       </details>
     </nav>
@@ -115,6 +188,7 @@ const moreLinks = [
         v-model="search"
         list="search-history"
         aria-label="Search games"
+        maxlength="200"
         placeholder="Search games..."
       /><button
         v-if="search"
@@ -162,5 +236,18 @@ const moreLinks = [
       Sign out
     </button>
   </header>
+  <nav class="mobile-quick-nav" aria-label="Quick navigation">
+    <RouterLink to="/catalogue">Discover</RouterLink
+    ><RouterLink to="/library">My Games</RouterLink
+    ><RouterLink to="/community">Community</RouterLink
+    ><button
+      type="button"
+      :aria-expanded="open"
+      aria-controls="primary-nav"
+      @click="showNavigation"
+    >
+      More
+    </button>
+  </nav>
   <AuthDialog v-if="showAuth" @close="showAuth = false" />
 </template>

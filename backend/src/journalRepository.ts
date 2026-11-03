@@ -193,6 +193,7 @@ export const databaseJournal: JournalRepository = {
   async summary(userId, year) {
     await migrateJournal(userId);
     const result: JournalSummary = {
+      days: {},
       minutes: 0,
       monthly: Array(12).fill(0),
       genres: [],
@@ -240,6 +241,12 @@ export const databaseJournal: JournalRepository = {
       for (const entry of batch) {
         const game = entry.game as JournalItem["game"];
         if (entry.kind === "session") {
+          const day = entry.entryDate.toISOString().slice(0, 10),
+            previousDay = result.days![day] ?? { minutes: 0, sessions: 0 };
+          result.days![day] = {
+            minutes: previousDay.minutes + entry.minutes,
+            sessions: previousDay.sessions + 1,
+          };
           result.minutes += entry.minutes;
           result.monthly[entry.entryDate.getUTCMonth()] += entry.minutes;
           const previous = games.get(entry.slug);

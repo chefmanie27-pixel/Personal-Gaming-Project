@@ -2,6 +2,7 @@ import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 import {
   loadLibrary,
+  bulkLibraryStatus,
   addLibraryEntry,
   patchLibraryEntry,
   deleteLibraryEntry,
@@ -244,6 +245,26 @@ export const useLibraryStore = defineStore("library", () => {
     const entry = find(game.slug)!;
     update(game.slug, { favorite: !entry.favorite });
   }
+  function bulkStatus(slugs: string[], status: PlayingStatus) {
+    const selected = new Set(slugs);
+    if (
+      !selected.size ||
+      selected.size > 20 ||
+      selected.size !== slugs.length ||
+      !statuses.includes(status) ||
+      slugs.some((s) => !find(s))
+    )
+      return;
+    if (accountToken)
+      return enqueue(async (token, current) => {
+        const rows = await bulkLibraryStatus(token, slugs, status);
+        if (current()) for (const row of rows) replace(row);
+      });
+    entries.value = entries.value.map((e) =>
+      selected.has(e.game.slug) ? { ...e, status } : e,
+    );
+    persist("Updated selected game statuses.");
+  }
   function remove(slug: string) {
     if (accountToken)
       return enqueue(async (token, current) => {
@@ -291,6 +312,7 @@ export const useLibraryStore = defineStore("library", () => {
     find,
     add,
     update,
+    bulkStatus,
     favorite,
     remove,
     stats,

@@ -5,6 +5,7 @@ import { useAuthStore } from "./auth";
 import { useWorkspaceStore, type JournalItem } from "./workspace";
 import type { Game } from "../types";
 export interface JournalSummary {
+  days?: Record<string, { minutes: number; sessions: number }>;
   minutes: number;
   monthly: number[];
   genres: [string, number][];

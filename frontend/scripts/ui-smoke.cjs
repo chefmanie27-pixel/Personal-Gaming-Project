@@ -55,7 +55,15 @@ async function port() {
   const accountJournal = new Map();
   let failNextJournalCreateAfterCommit = false;
   const accountEntries = new Map();
+  let bulkRequests = 0;
   let socialProfile = null;
+  let fixtureRole = "USER",
+    discussionsEnabled = true,
+    omitThreadFromList = false;
+  const discussionReports = new Map(),
+    discussionActions = [];
+  const discussionThreads = new Map(),
+    discussionReplies = new Map();
   const socialReviews = new Map(),
     socialCollections = new Map();
   const card = () => ({
@@ -65,6 +73,12 @@ async function port() {
     avatar: "",
     visibility: "public",
   });
+  let historyEnabled = false,
+    failHistoryPage = false;
+  const fixtureAlerts = new Map();
+  let failAlertAfterCommit = false;
+  const savedPrices = new Map();
+  let failHistory = false;
   let failGames = false;
   let requests = [];
   const api = http.createServer((req, res) => {
@@ -84,6 +98,8 @@ async function port() {
       return;
     }
     if (
+      req.url.startsWith("/api/discussions") ||
+      req.url.startsWith("/api/artwork") ||
       req.url.startsWith("/api/social") ||
       req.url.startsWith("/api/steam-library")
     ) {
@@ -96,7 +112,124 @@ async function port() {
           m = req.method;
         requests.push(p + u.search);
         let result = { data: [], nextCursor: null, nextOffset: null };
-        if (p === "/api/social/me") {
+        if (p === "/api/discussions/capabilities")
+          result = { enabled: discussionsEnabled };
+        else if (p === "/api/discussions") {
+          if (m === "POST") {
+            discussionThreads.set(v.id, {
+              ...v,
+              userId: "fixture-user",
+              slug: v.game.slug,
+              version: 0,
+              createdAt: new Date().toISOString(),
+              author: card(),
+            });
+            result = { data: discussionThreads.get(v.id) };
+          } else
+            result = {
+              data: omitThreadFromList ? [] : [...discussionThreads.values()],
+              nextCursor: null,
+            };
+        } else if (p === "/api/discussions/moderation/reports") {
+          result = {
+            data: [...discussionReports.values()]
+              .filter((r) => r.status === "open")
+              .map((r) => ({
+                ...r,
+                thread: discussionThreads.get(r.threadId),
+                reply: discussionReplies.get(r.replyId),
+              })),
+            nextCursor: null,
+          };
+        } else if (p === "/api/discussions/moderation/actions") {
+          result = { data: discussionActions, nextCursor: null };
+        } else if (p.startsWith("/api/discussions/moderation/reports/")) {
+          const r = discussionReports.get(p.split("/").pop());
+          r.status = "resolved";
+          if (v.hide) {
+            if (r.replyId) discussionReplies.delete(r.replyId);
+            else discussionThreads.delete(r.threadId);
+          }
+          discussionActions.unshift({
+            id: "action-" + discussionActions.length,
+            ...v,
+            action: v.hide ? "hide" : "dismiss",
+            targetKey: r.replyId
+              ? "reply:" + r.replyId
+              : "thread:" + r.threadId,
+            createdAt: new Date().toISOString(),
+          });
+          result = { success: true };
+        } else if (p.startsWith("/api/discussions/")) {
+          const id = p.split("/")[3];
+          if (p.includes("/replies/")) {
+            const rid = p.split("/")[5],
+              old = discussionReplies.get(rid);
+            if (m === "PATCH") {
+              if (v.version !== old.version) {
+                res.statusCode = 409;
+                res.end(
+                  JSON.stringify({ error: "Reply changed or is unavailable." }),
+                );
+                return;
+              }
+              discussionReplies.set(rid, {
+                ...old,
+                ...v,
+                version: old.version + 1,
+              });
+              result = { data: discussionReplies.get(rid) };
+            } else if (m === "DELETE") {
+              discussionReplies.delete(rid);
+              result = { success: true };
+            }
+          } else if (p.endsWith("/replies")) {
+            if (m === "POST")
+              discussionReplies.set(v.id, {
+                ...v,
+                userId: "fixture-user",
+                threadId: id,
+                version: 0,
+                createdAt: new Date().toISOString(),
+                author: card(),
+              });
+            result = {
+              data:
+                m === "POST"
+                  ? discussionReplies.get(v.id)
+                  : [...discussionReplies.values()].filter(
+                      (r) => r.threadId === id,
+                    ),
+              nextCursor: null,
+            };
+          } else if (p.endsWith("/report")) {
+            const reportId = "report-" + (v.replyId ?? id);
+            discussionReports.set(reportId, {
+              id: reportId,
+              threadId: id,
+              ...v,
+              status: "open",
+              createdAt: new Date().toISOString(),
+            });
+            result = { success: true };
+          } else if (m === "PATCH") {
+            discussionThreads.set(id, {
+              ...discussionThreads.get(id),
+              ...v,
+              version: v.version + 1,
+            });
+            result = { data: discussionThreads.get(id) };
+          } else if (m === "DELETE") {
+            discussionThreads.delete(id);
+            result = { success: true };
+          } else if (m === "GET") {
+            const thread = discussionThreads.get(id);
+            if (!thread) {
+              res.statusCode = 404;
+              result = { error: "Discussion unavailable." };
+            } else result = { data: thread };
+          }
+        } else if (p === "/api/social/me") {
           if (m === "PUT")
             socialProfile = {
               ...v,
@@ -212,6 +345,7 @@ async function port() {
     if (
       req.url.startsWith("/api/journal") ||
       req.url.startsWith("/api/workspace") ||
+      req.url.startsWith("/api/alerts") ||
       req.url.startsWith("/api/library") ||
       req.url.startsWith("/api/auth/")
     ) {
@@ -252,6 +386,25 @@ async function port() {
             }
             result = {
               data: {
+                days: Object.fromEntries(
+                  [
+                    ...new Set(
+                      records
+                        .filter((e) => e.kind === "session")
+                        .map((e) => e.date),
+                    ),
+                  ].map((date) => [
+                    date,
+                    {
+                      minutes: records
+                        .filter((e) => e.kind === "session" && e.date === date)
+                        .reduce((s, e) => s + e.minutes, 0),
+                      sessions: records.filter(
+                        (e) => e.kind === "session" && e.date === date,
+                      ).length,
+                    },
+                  ]),
+                ),
                 minutes,
                 monthly,
                 genres: [...genres],
@@ -336,6 +489,78 @@ async function port() {
               result = {};
             }
           }
+        } else if (req.url === "/api/alerts/capabilities") {
+          result = { history: historyEnabled };
+        } else if (req.url.startsWith("/api/alerts/deliveries")) {
+          if (failHistoryPage) {
+            res.statusCode = 503;
+            result = { error: "History fixture unavailable" };
+          } else {
+            const more = new URL(req.url, "http://localhost").searchParams.has(
+              "cursor",
+            );
+            result = {
+              data: [
+                {
+                  id: more ? "event-2" : "event-1",
+                  alertId: "alert-0",
+                  slug: "steam-100",
+                  title: more
+                    ? "Earlier matched game"
+                    : "Delivered fixture game",
+                  amount: "80.00",
+                  currency: "ZAR",
+                  mode: "target",
+                  outcome: more ? "disabled" : "delivered",
+                  observedAt: new Date().toISOString(),
+                  createdAt: new Date().toISOString(),
+                },
+              ],
+              nextCursor: more ? null : "page-two",
+            };
+          }
+        } else if (req.url === "/api/alerts") {
+          if (req.method === "POST") {
+            const key = input.gameSlug + ":" + input.target,
+              existing = fixtureAlerts.has(key);
+            if (!existing)
+              fixtureAlerts.set(key, {
+                id: "alert-" + fixtureAlerts.size,
+                target: String(input.target),
+                currency: "ZAR",
+                active: true,
+                listing: {
+                  game: games.find((g) => g.slug === input.gameSlug),
+                  store: { name: "Steam" },
+                  prices: [],
+                },
+              });
+            if (failAlertAfterCommit) {
+              failAlertAfterCommit = false;
+              res.statusCode = 503;
+              res.end(
+                JSON.stringify({
+                  error: "Simulated response failure after alert commit",
+                }),
+              );
+              return;
+            }
+            res.statusCode = existing ? 200 : 201;
+            result = { data: fixtureAlerts.get(key), existing };
+          } else result = { data: [...fixtureAlerts.values()] };
+        } else if (req.url.startsWith("/api/alerts/")) {
+          const id = req.url.split("/").pop(),
+            entry = [...fixtureAlerts].find(([, a]) => a.id === id);
+          if (!entry) {
+            res.statusCode = 404;
+            result = { error: "Alert not found" };
+          } else if (req.method === "DELETE") {
+            fixtureAlerts.delete(entry[0]);
+            res.statusCode = 204;
+          } else {
+            Object.assign(entry[1], input);
+            res.statusCode = 204;
+          }
         } else if (req.url === "/api/workspace") {
           if (req.method === "PUT") {
             if (input.version !== accountWorkspace.version) {
@@ -353,7 +578,7 @@ async function port() {
               user: {
                 id: "fixture-user",
                 email: "fixture@example.invalid",
-                role: "USER",
+                role: fixtureRole,
               },
             },
           };
@@ -362,10 +587,25 @@ async function port() {
             data: {
               id: "fixture-user",
               email: "fixture@example.invalid",
-              role: "USER",
+              role: fixtureRole,
             },
           };
-        else if (req.url === "/api/library/import") {
+        else if (req.url === "/api/library/bulk-status") {
+          bulkRequests++;
+          if (input.slugs.some((slug) => !accountEntries.has(slug))) {
+            res.statusCode = 404;
+            result = { error: "Missing selected game" };
+          } else {
+            for (const slug of input.slugs)
+              accountEntries.set(slug, {
+                ...accountEntries.get(slug),
+                status: input.status,
+              });
+            result = {
+              data: input.slugs.map((slug) => accountEntries.get(slug)),
+            };
+          }
+        } else if (req.url === "/api/library/import") {
           for (const entry of input.entries)
             if (!accountEntries.has(entry.game.slug))
               accountEntries.set(entry.game.slug, entry);
@@ -438,9 +678,41 @@ async function port() {
           storeUrl: games[0].storeUrl,
         },
       };
-    else if (/\/price-history$/.test(url.pathname))
-      body = { data: [], meta: { sourceType: "steam", currency: "ZAR" } };
-    else if (url.pathname.startsWith("/api/games/"))
+    else if (url.pathname.endsWith("/observe")) {
+      const slug = url.pathname.split("/")[3];
+      if (!savedPrices.has(slug))
+        savedPrices.set(slug, [
+          {
+            amount: 100,
+            observedAt: new Date().toISOString(),
+            sourceType: "steam",
+          },
+        ]);
+      body = {
+        data: {
+          gameSlug: slug,
+          listingId: "fixture-listing",
+          recorded: true,
+          priceAvailable: true,
+          region: "ZA",
+          currency: "ZAR",
+        },
+      };
+    } else if (url.pathname.endsWith("/price-history")) {
+      if (failHistory) {
+        res.statusCode = 502;
+        body = { error: "Fixture outage" };
+      } else
+        body = {
+          data: savedPrices.get(url.pathname.split("/")[3]) ?? [],
+          meta: {
+            sourceType: "observed",
+            currency: "ZAR",
+            region: "ZA",
+            coverage: "Fixture genuine observations",
+          },
+        };
+    } else if (url.pathname.startsWith("/api/games/"))
       body = {
         data:
           games.find((g) => g.slug === url.pathname.split("/").pop()) ??
@@ -677,14 +949,23 @@ async function port() {
       await evaluate(
         'getComputedStyle(document.querySelector(".main-nav")).display',
       ),
-      "flex",
+      "grid",
+    );
+    await evaluate(
+      '[...document.querySelectorAll("#primary-nav summary")].find(s=>s.textContent==="My Games").click()',
+    );
+    assert.equal(
+      await evaluate(
+        '[...document.querySelectorAll("#primary-nav details")].find(d=>d.querySelector("summary").textContent==="My Games").open',
+      ),
+      true,
     );
     await evaluate(
       '[...document.querySelectorAll(".main-nav a")].find(a=>a.pathname==="/library").click()',
     );
     await waitFor(
       () => evaluate('location.pathname==="/library"'),
-      "mobile navigation",
+      "grouped mobile navigation",
     );
     await navigate("/catalogue", ".game-card");
     await evaluate(
@@ -1164,6 +1445,73 @@ async function port() {
       "social profile saved",
     );
     assert.equal(socialProfile.username, "fixture_player");
+    await evaluate(
+      '{const f=document.querySelector("form.social-form"),fieldset=[...f.querySelectorAll("fieldset")].find(x=>x.querySelector("legend").textContent==="Dashboard widgets");fieldset.querySelector("input[value=genres]").click();fieldset.querySelectorAll("button")[1].click();f.requestSubmit();}',
+    );
+    await waitFor(
+      () =>
+        evaluate(
+          'document.body.textContent.includes("Profile and preferences saved")',
+        ),
+      "widget settings saved",
+    );
+    await navigate("/dashboard", ".dashboard-widget-stack");
+    assert.match(
+      await evaluate(
+        'document.querySelector(".dashboard-widget-stack").textContent',
+      ),
+      /Your collection at a glance/,
+    );
+    assert.equal(
+      await evaluate(
+        'document.querySelector(".dashboard-widget-stack").textContent.includes("Genre mix")',
+      ),
+      false,
+    );
+    assert.equal(
+      await evaluate(
+        'document.querySelector(".dashboard-widget-stack").firstElementChild.tagName',
+      ),
+      "SECTION",
+    );
+
+    await navigate("/social/studio", "form.social-form");
+    await evaluate(
+      '(async()=>{const form=document.querySelector("form.social-form"),field=[...form.querySelectorAll("fieldset")].find(x=>x.querySelector("legend").textContent==="Homepage sections");for(const input of field.querySelectorAll("input[type=checkbox]")){if(input.value!=="rated"&&input.checked){input.click();await new Promise(requestAnimationFrame);}}form.requestSubmit();})()',
+    );
+    await waitFor(
+      () =>
+        evaluate(
+          'document.body.textContent.includes("Profile and preferences saved")',
+        ),
+      "homepage sections saved",
+    );
+    await waitFor(
+      async () =>
+        socialProfile.settings.homeSections.length === 1 &&
+        socialProfile.settings.homeSections[0] === "rated",
+      "homepage preferences persisted",
+    );
+    await navigate("/", ".game-carousel");
+    await waitFor(
+      () =>
+        evaluate(
+          'document.querySelector(".game-carousel")?.closest("section").textContent.includes("Top rated")',
+        ),
+      "account homepage preferences loaded",
+    );
+    assert.match(
+      await evaluate(
+        'document.querySelector(".game-carousel").closest("section").textContent',
+      ),
+      /Top rated/,
+    );
+    assert.match(
+      await evaluate(
+        'document.querySelector(".game-carousel .game-card").textContent',
+      ),
+      /Fixture Game 15/,
+    );
     await navigate("/u/fixture_player", ".social-profile-hero h1");
     assert.equal(
       await evaluate(
@@ -1236,6 +1584,429 @@ async function port() {
       deviceScaleFactor: 1,
       mobile: false,
     });
+    await navigate("/", ".recommendation-feedback");
+    const dismissedHref = await evaluate(
+      'document.querySelector(".recommendation-feedback").closest("article").querySelector("a.game-card").getAttribute("href")',
+    );
+    const dismissedSlug = dismissedHref.split("/").pop();
+    await evaluate(
+      'document.querySelector(".recommendation-feedback").querySelectorAll("button")[1].click()',
+    );
+    await waitFor(
+      async () =>
+        accountWorkspace.data.preferences.recommendationFeedback?.[
+          dismissedSlug
+        ]?.choice === "not-interested",
+      "private feedback persisted",
+    );
+    await navigate("/", ".recommendation-feedback");
+    await waitFor(
+      () =>
+        evaluate(
+          '!document.querySelector(".storage-warning")&&!!document.querySelector(".recommendation-feedback")',
+        ),
+      "account feedback reloaded",
+    );
+    await waitFor(
+      () =>
+        evaluate(
+          '![...document.querySelectorAll(".recommendation-feedback")].some(el=>el.closest("article").querySelector("a.game-card").getAttribute("href")===' +
+            JSON.stringify(dismissedHref) +
+            ")",
+        ),
+      "dismissed recommendation excluded after refresh",
+    );
+    await navigate("/games/steam-100", ".game-discussions form");
+    await evaluate(
+      '(()=>{const f=document.querySelector(".game-discussions form");const title=f.querySelector("input"),body=f.querySelector("textarea");title.value="A fixture discussion";title.dispatchEvent(new Event("input",{bubbles:true}));body.value="Escaped <script> content";body.dispatchEvent(new Event("input",{bubbles:true}));f.querySelector("input[type=checkbox]").click();f.requestSubmit();})()',
+    );
+    await waitFor(async () => discussionThreads.size === 1, "discussion saved");
+    await waitFor(
+      () =>
+        evaluate(
+          '[...document.querySelectorAll(".game-discussions button")].some(b=>b.textContent.includes("View replies"))',
+        ),
+      "discussion reloaded",
+    );
+    await evaluate(
+      '[...document.querySelectorAll(".game-discussions button")].find(b=>b.textContent.includes("View replies")).click()',
+    );
+    await waitFor(
+      () =>
+        evaluate('!!document.querySelector(".discussion-replies textarea")'),
+      "replies opened",
+    );
+    await evaluate(
+      '(()=>{const f=document.querySelector(".discussion-replies form"),b=f.querySelector("textarea");b.value="A real reply fixture";b.dispatchEvent(new Event("input",{bubbles:true}));f.requestSubmit();})()',
+    );
+    await waitFor(async () => discussionReplies.size === 1, "reply saved");
+    await waitFor(
+      () =>
+        evaluate(
+          '[...document.querySelectorAll(".discussion-replies button")].some(b=>b.textContent.trim()==="Edit reply")',
+        ),
+      "editable reply loaded",
+    );
+    await evaluate(
+      '[...document.querySelectorAll(".discussion-replies button")].find(b=>b.textContent.trim()==="Edit reply").click()',
+    );
+    await waitFor(
+      () => evaluate('!!document.querySelector(".reply-edit-form")'),
+      "reply editor",
+    );
+    const replyFixtureId = [...discussionReplies.keys()][0];
+    discussionReplies.get(replyFixtureId).version++;
+    await evaluate(
+      '(()=>{const f=document.querySelector(".reply-edit-form"),b=f.querySelector("textarea");b.value="Preserved stale draft";b.dispatchEvent(new Event("input",{bubbles:true}));f.requestSubmit();})()',
+    );
+    await waitFor(
+      () =>
+        evaluate(
+          'document.querySelector(".game-discussions").textContent.includes("Reply changed or is unavailable.")',
+        ),
+      "reply conflict shown",
+    );
+    assert.equal(
+      await evaluate(
+        'document.querySelector(".reply-edit-form textarea").value',
+      ),
+      "Preserved stale draft",
+    );
+    await evaluate(
+      '[...document.querySelectorAll(".reply-edit-form button")].find(b=>b.textContent.includes("Cancel")).click();[...document.querySelectorAll(".discussion-replies button")].find(b=>b.textContent.includes("Refresh replies")).click()',
+    );
+    await waitFor(
+      () =>
+        evaluate(
+          '![...document.querySelectorAll(".discussion-replies button")].some(b=>b.disabled)',
+        ),
+      "reply reload complete",
+    );
+    await evaluate(
+      '[...document.querySelectorAll(".discussion-replies button")].find(b=>b.textContent.trim()==="Edit reply").click()',
+    );
+    await evaluate(
+      '(()=>{const f=document.querySelector(".reply-edit-form"),b=f.querySelector("textarea");b.value="Edited and saved reply";b.dispatchEvent(new Event("input",{bubbles:true}));f.requestSubmit();})()',
+    );
+    await waitFor(
+      async () =>
+        discussionReplies.get(replyFixtureId).body === "Edited and saved reply",
+      "reply edit saved",
+    );
+    const threadFixtureId = [...discussionThreads.keys()][0];
+    omitThreadFromList = true;
+    await navigate(
+      "/games/steam-100?discussion=" + threadFixtureId,
+      ".discussion-replies",
+    );
+    assert.equal(
+      await evaluate(
+        'document.querySelector(".discussion-replies h3").textContent.includes("A fixture discussion")',
+      ),
+      true,
+    );
+    await waitFor(
+      () =>
+        evaluate(
+          'document.querySelector(".discussion-replies").textContent.includes("Edited and saved reply")',
+        ),
+      "direct link reply loaded",
+    );
+    await evaluate(
+      '[...document.querySelectorAll(".discussion-replies button")].find(b=>b.textContent.trim()==="Report reply").click()',
+    );
+    await waitFor(
+      () => evaluate('!!document.querySelector(".discussion-report-form")'),
+      "reply report form",
+    );
+    await evaluate(
+      '(()=>{const f=document.querySelector(".discussion-report-form"),r=f.querySelector("textarea");r.value="Fixture moderation reason";r.dispatchEvent(new Event("input",{bubbles:true}));f.requestSubmit();})()',
+    );
+    await waitFor(
+      async () => discussionReports.size === 1,
+      "reply report saved",
+    );
+    omitThreadFromList = false;
+    fixtureRole = "ADMIN";
+    await navigate(
+      "/community?tab=Moderation",
+      ".discussion-moderation article",
+    );
+    await evaluate(
+      '(()=>{const input=document.querySelector(".discussion-moderation article input");input.value="Reviewed fixture content";input.dispatchEvent(new Event("input",{bubbles:true}));})()',
+    );
+    await waitFor(
+      () =>
+        evaluate(
+          '!document.querySelector(".discussion-moderation article button").disabled',
+        ),
+      "moderation reason accepted",
+    );
+    await evaluate(
+      'document.querySelector(".discussion-moderation article button").click()',
+    );
+    await waitFor(
+      async () => discussionActions.length === 1,
+      "moderation action recorded",
+    );
+    await waitFor(
+      () =>
+        evaluate(
+          'document.querySelector(".discussion-moderation").textContent.includes("Reviewed fixture content")',
+        ),
+      "moderation history shown",
+    );
+    fixtureRole = "USER";
+    await navigate(
+      "/games/steam-100?discussion=" + threadFixtureId,
+      ".discussion-replies",
+    );
+    assert.equal(
+      await evaluate(
+        'document.querySelector(".discussion-replies").textContent.includes("Edited and saved reply")',
+      ),
+      false,
+    );
+
+    const removedThread = discussionThreads.get(threadFixtureId);
+    discussionThreads.delete(threadFixtureId);
+    await evaluate(
+      '[...document.querySelectorAll(".discussion-replies button")].find(b=>b.textContent.includes("Refresh replies")).click()',
+    );
+    await waitFor(
+      () =>
+        evaluate(
+          'document.querySelector(".game-discussions").textContent.includes("Discussion unavailable.")&&!document.querySelector(".discussion-replies")',
+        ),
+      "unavailable direct thread clears stale replies",
+    );
+    discussionThreads.set(threadFixtureId, removedThread);
+    discussionsEnabled = false;
+    await navigate("/community?tab=Discussions", ".game-discussions");
+    await waitFor(
+      () =>
+        evaluate(
+          'document.querySelector(".game-discussions").textContent.includes("not enabled")',
+        ),
+      "disabled discussion message",
+    );
+    assert.equal(
+      await evaluate('!!document.querySelector(".game-discussions form")'),
+      false,
+    );
+    discussionsEnabled = true;
+    await navigate("/games/steam-101", ".collection-controls button");
+    await evaluate(
+      '[...document.querySelectorAll(".collection-controls button")].find(b=>b.textContent.includes("Add to Library")).click()',
+    );
+    await waitFor(
+      () => evaluate('!!document.querySelector(".collection-controls select")'),
+      "second account game added",
+    );
+    const privateNoteBefore = accountEntries.get("steam-100").notes;
+    await navigate("/library", ".library-entry-meta");
+    await evaluate(
+      '(async()=>{for(const input of document.querySelectorAll(".check-label input[type=checkbox]")){input.click();await new Promise(requestAnimationFrame);}const select=[...document.querySelectorAll("select")].find(el=>el.getAttribute("aria-label")==="Bulk playing status");select.value="On Hold";select.dispatchEvent(new Event("change",{bubbles:true}));window.confirm=()=>true;await new Promise(requestAnimationFrame);[...document.querySelectorAll("main button")].find(b=>b.textContent.includes("Update selected status")).click();})()',
+    );
+    await waitFor(
+      async () =>
+        bulkRequests === 1 &&
+        [...accountEntries.values()].every((e) => e.status === "On Hold"),
+      "single bulk status request",
+    );
+    assert.equal(accountEntries.get("steam-100").notes, privateNoteBefore);
+    await navigate("/goals", ".goal-form");
+    await evaluate(
+      '{const form=document.querySelector(".goal-form"),title=form.querySelector("input");title.value="A private completion goal";title.dispatchEvent(new Event("input",{bubbles:true}));form.requestSubmit();}',
+    );
+    await waitFor(
+      async () =>
+        accountWorkspace.data.goals?.some(
+          (g) => g.title === "A private completion goal",
+        ),
+      "private goal persisted",
+    );
+    await navigate("/goals", ".goal-card");
+    await waitFor(
+      () => evaluate('!!document.querySelector(".activity-calendar")'),
+      "recorded activity calendar",
+    );
+    assert.match(
+      await evaluate('document.querySelector(".goal-card").textContent'),
+      /private completion goal/,
+    );
+    assert.match(
+      await evaluate('document.querySelector(".private-timeline").textContent'),
+      /recorded|Game added/i,
+    );
+    for (const width of [390, 320]) {
+      await cdp("Emulation.setDeviceMetricsOverride", {
+        width,
+        height: 1000,
+        deviceScaleFactor: 1,
+        mobile: true,
+      });
+      assert.equal(
+        await evaluate("document.documentElement.scrollWidth<=innerWidth+1"),
+        true,
+        "goals overflow at " + width,
+      );
+    }
+    await cdp("Emulation.setDeviceMetricsOverride", {
+      width: 1440,
+      height: 1000,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    await navigate("/games/steam-100", ".history-card");
+    assert.match(
+      await evaluate('document.querySelector(".history-card").textContent'),
+      /No price observations yet/,
+    );
+    await evaluate(
+      '[...document.querySelectorAll("main button")].find(b=>b.textContent.includes("Save current store observation")).click()',
+    );
+    await waitFor(
+      () =>
+        evaluate(
+          'document.querySelector(".history-card").textContent.includes("Latest stored quote")',
+        ),
+      "stored observation displayed",
+    );
+    assert.equal(savedPrices.get("steam-100").length, 1);
+    await waitFor(
+      () => evaluate('!!document.querySelector(".history-card canvas")'),
+      "lazy price chart loaded",
+    );
+    failHistory = true;
+    await evaluate(
+      '[...document.querySelectorAll(".history-card button")].find(b=>b.textContent.includes("Refresh history")).click()',
+    );
+    await waitFor(
+      () =>
+        evaluate(
+          'document.querySelector(".history-card").textContent.includes("Price history unavailable")',
+        ),
+      "price history outage isolated",
+    );
+    failHistory = false;
+    await evaluate(
+      '[...document.querySelectorAll(".history-card button")].find(b=>b.textContent.includes("Try again")).click()',
+    );
+    await waitFor(
+      () =>
+        evaluate(
+          'document.querySelector(".history-card").textContent.includes("Latest stored quote")',
+        ),
+      "price history retry",
+    );
+
+    await navigate("/games/steam-100", ".alert-form input");
+    await evaluate(
+      '(()=>{const input=document.querySelector(".alert-form input");input.value="85.25";input.dispatchEvent(new Event("input",{bubbles:true}));document.querySelector(".alert-form button").click();})()',
+    );
+    await waitFor(
+      () =>
+        evaluate(
+          'document.querySelector(".alert-form").textContent.includes("Price alert saved.")',
+        ),
+      "alert created",
+    );
+    assert.equal(fixtureAlerts.size, 1);
+    await evaluate('document.querySelector(".alert-form button").click()');
+    await waitFor(
+      () =>
+        evaluate(
+          'document.querySelector(".alert-form").textContent.includes("already saved")',
+        ),
+      "duplicate alert feedback",
+    );
+    assert.equal(fixtureAlerts.size, 1);
+    fixtureAlerts.get("steam-100:85.25").active = false;
+    await evaluate('document.querySelector(".alert-form button").click()');
+    await waitFor(
+      () =>
+        evaluate(
+          'document.querySelector(".alert-form").textContent.includes("paused")',
+        ),
+      "paused alert remains paused",
+    );
+    assert.equal(fixtureAlerts.get("steam-100:85.25").active, false);
+    failAlertAfterCommit = true;
+    await evaluate(
+      '(()=>{const input=document.querySelector(".alert-form input");input.value="80";input.dispatchEvent(new Event("input",{bubbles:true}));document.querySelector(".alert-form button").click();})()',
+    );
+    await waitFor(
+      () =>
+        evaluate(
+          'document.querySelector(".alert-form").textContent.includes("Simulated response failure")',
+        ),
+      "uncertain alert save shown",
+    );
+    await evaluate('document.querySelector(".alert-form button").click()');
+    await waitFor(
+      () =>
+        evaluate(
+          'document.querySelector(".alert-form").textContent.includes("already saved")',
+        ),
+      "uncertain alert retry reuses committed row",
+    );
+    assert.equal(fixtureAlerts.size, 2);
+
+    historyEnabled = true;
+    failHistoryPage = true;
+    await navigate("/account", ".alert-delivery-history");
+    await waitFor(
+      () =>
+        evaluate(
+          'document.querySelector(".alert-delivery-history").textContent.includes("History fixture unavailable")',
+        ),
+      "history failure",
+    );
+    failHistoryPage = false;
+    await evaluate(
+      '[...document.querySelectorAll(".alert-delivery-history button")].find(b=>b.textContent.includes("Retry")).click()',
+    );
+    await waitFor(
+      () =>
+        evaluate(
+          'document.querySelector(".alert-delivery-history").textContent.includes("Delivered fixture game")',
+        ),
+      "history retry loaded",
+    );
+    await evaluate(
+      '[...document.querySelectorAll(".alert-delivery-history button")].find(b=>b.textContent.includes("More alert history")).click()',
+    );
+    await waitFor(
+      () =>
+        evaluate(
+          'document.querySelectorAll(".alert-delivery-history article").length===2',
+        ),
+      "history next page",
+    );
+    assert.equal(
+      await evaluate(
+        'document.querySelector(".alert-delivery-history").textContent.includes("notifications were disabled")',
+      ),
+      true,
+    );
+    await cdp("Emulation.setDeviceMetricsOverride", {
+      width: 320,
+      height: 850,
+      deviceScaleFactor: 1,
+      mobile: true,
+    });
+    assert.equal(
+      await evaluate("document.documentElement.scrollWidth<=innerWidth+1"),
+      true,
+      "history mobile overflow",
+    );
+    await cdp("Emulation.setDeviceMetricsOverride", {
+      width: 1440,
+      height: 1000,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
     await navigate("/", ".hero h1");
     await delay(250);
     const shot = await cdp("Page.captureScreenshot", { format: "png" });
@@ -1244,7 +2015,7 @@ async function port() {
     console.log("Visual screenshot: " + shotPath);
     assert.deepEqual(errors, []);
     console.log(
-      "PASS: social profile publishing/review spoilers and escaping/likes/shared collections/inbox and responsive social routes; normalized journal pagination/search/import/review CRUD and summaries; collections/journal/spoiler/picker/comparison/watchlist/PNG and 15 responsive routes; multi-store deal pagination/filter/custom budget; account sign-in/import/save/refresh/sign-out plus guest add/favorite/journal/persistence/dashboard/removal, search empty and retry, mobile menu, dialog keyboard, and 7 routes at 1440/1024/768/390/320px.",
+      "PASS: private alert-history error/retry/pagination/mobile; duplicate/paused/uncertain-retry price alerts; discussion reply edits/conflicts/direct links/unavailable privacy clearing/report moderation history/disabled capability; social profile publishing/review spoilers and escaping/likes/shared collections/inbox and responsive social routes; normalized journal pagination/search/import/review CRUD and summaries; collections/journal/spoiler/picker/comparison/watchlist/PNG and 15 responsive routes; multi-store deal pagination/filter/custom budget; account sign-in/import/save/refresh/sign-out plus guest add/favorite/journal/persistence/dashboard/removal, search empty and retry, mobile menu, dialog keyboard, and 7 routes at 1440/1024/768/390/320px.",
     );
   } catch (error) {
     console.error(

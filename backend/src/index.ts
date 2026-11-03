@@ -1,3 +1,14 @@
+import { runDurableAlertBatch } from "./jobs/durableAlerts.js";
+import { createAlertsRouter } from "./alerts.js";
+import {
+  requestContext,
+  readiness,
+  installShutdown,
+  operationalLog,
+} from "./operations.js";
+import { createDiscussionsRouter } from "./discussions.js";
+import { observationRouter, priceSource } from "./observations.js";
+import { artworkRouter } from "./artwork.js";
 import { steamLibrary } from "./steamLibrary.js";
 import { createSocialRouter } from "./social.js";
 import "dotenv/config";
@@ -31,11 +42,16 @@ import {
   type AuthRequest,
 } from "./auth.js";
 import { evaluatePriceAlerts } from "./jobs/priceAlerts.js";
-import { startScheduler } from "./jobs/scheduler.js";
+import {
+  startScheduler,
+  stopScheduler,
+  schedulerStatus,
+} from "./jobs/scheduler.js";
 
 const app = express();
 const port = config.PORT;
 app.disable("x-powered-by");
+app.use(requestContext());
 app.use((_req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
@@ -57,7 +73,17 @@ app.use(
   express.json({ limit: "5mb" }),
   createJournalRouter(databaseJournal),
 );
+app.use(
+  "/api/artwork",
+  express.raw({
+    type: ["image/png", "image/jpeg", "image/webp"],
+    limit: "2mb",
+  }),
+  artworkRouter,
+);
 app.use(express.json());
+app.use("/api/discussions", createDiscussionsRouter());
+app.use("/api/games", observationRouter);
 app.use("/api/social", createSocialRouter());
 app.use("/api/steam-library", steamLibrary);
 app.post(
@@ -73,6 +99,14 @@ app.use("/api/auth", steamAuth);
 
 app.get("/api/health", (_req, res) =>
   res.json({ status: "ok", service: "gamevault-api" }),
+);
+
+app.get(
+  "/api/ready",
+  readiness(
+    () => prisma.$queryRaw`SELECT 1`,
+    () => lifecycle.isClosing(),
+  ),
 );
 
 app.get("/api/upcoming", async (req, res) => {
@@ -258,26 +292,42 @@ app.get("/api/deals", async (req, res) => {
   }
 });
 app.get("/api/games/:slug/price-history", async (req, res) => {
-  if (!/^steam-[1-9][0-9]{0,9}$/.test(String(req.params.slug)))
+  if (
+    !priceSource(String(req.params.slug)) ||
+    String(req.params.slug).length > 191
+  )
     return res.status(404).json({ error: "Game not found" });
   try {
     const stored = await prisma.regionalPrice.findMany({
       where: {
-        listing: { game: { slug: String(req.params.slug) } },
+        listing: {
+          game: { slug: String(req.params.slug) },
+          store: { name: priceSource(String(req.params.slug))!.name },
+        },
         region: "ZA",
         currency: "ZAR",
-        sourceType: { not: "mock" },
+        sourceType: { notIn: ["mock", "seed", "development"] },
+        amount: { gte: 0 },
+        observedAt: { lte: new Date() },
       },
-      orderBy: { observedAt: "asc" },
+      take: 500,
+      orderBy: [{ observedAt: "desc" }, { id: "desc" }],
       select: { amount: true, observedAt: true, sourceType: true },
     });
     return res.json({
-      data: stored.map((p) => ({
+      data: stored.reverse().map((p) => ({
         amount: Number(p.amount),
         observedAt: p.observedAt,
         sourceType: p.sourceType,
       })),
-      meta: { currency: "ZAR", sourceType: "observed" },
+      meta: {
+        currency: "ZAR",
+        region: "ZA",
+        store: priceSource(String(req.params.slug))!.name,
+        sourceType: "observed",
+        coverage:
+          "Most recent 500 stored non-mock observations for this exact storefront listing",
+      },
     });
   } catch {
     return res.json({
@@ -436,114 +486,7 @@ app.delete(
   },
 );
 
-app.get("/api/alerts", requireAuth, async (req: AuthRequest, res, next) => {
-  try {
-    const alerts = await prisma.priceAlert.findMany({
-      where: { userId: req.user!.id },
-      include: {
-        listing: {
-          include: {
-            game: true,
-            store: true,
-            prices: { orderBy: { observedAt: "desc" }, take: 1 },
-          },
-        },
-      },
-      orderBy: { lastTriggered: "desc" },
-    });
-    return res.json({ data: alerts });
-  } catch (error) {
-    return next(error);
-  }
-});
-
-app.post("/api/alerts", requireAuth, async (req: AuthRequest, res, next) => {
-  const parsed = z
-    .object({
-      gameSlug: z.string().min(1),
-      target: z.number().positive(),
-      currency: z.string().length(3).default("ZAR"),
-    })
-    .safeParse(req.body);
-  if (!parsed.success)
-    return res.status(400).json({
-      error:
-        "A game, positive target price, and three-letter currency are required",
-      details: parsed.error.flatten(),
-    });
-  try {
-    const listing = await prisma.storeListing.findFirst({
-      where: {
-        game: { slug: parsed.data.gameSlug },
-        prices: { some: { currency: parsed.data.currency, region: "ZA" } },
-      },
-    });
-    if (!listing)
-      return res.status(404).json({
-        error: "No regional price listing is available for this game yet",
-      });
-    const alert = await prisma.priceAlert.create({
-      data: {
-        userId: req.user!.id,
-        listingId: listing.id,
-        target: parsed.data.target,
-        currency: parsed.data.currency,
-      },
-      include: { listing: { include: { game: true, store: true } } },
-    });
-    return res.status(201).json({ data: alert });
-  } catch (error) {
-    return next(error);
-  }
-});
-
-app.patch(
-  "/api/alerts/:id",
-  requireAuth,
-  async (req: AuthRequest, res, next) => {
-    const parsed = z
-      .object({
-        active: z.boolean().optional(),
-        target: z.number().positive().optional(),
-      })
-      .refine(
-        (value) => value.active !== undefined || value.target !== undefined,
-      )
-      .safeParse(req.body);
-    if (!parsed.success)
-      return res
-        .status(400)
-        .json({ error: "Provide an active state or positive target price" });
-    try {
-      const result = await prisma.priceAlert.updateMany({
-        where: { id: String(req.params.id), userId: req.user!.id },
-        data: parsed.data,
-      });
-      return result.count
-        ? res.status(204).send()
-        : res.status(404).json({ error: "Alert not found" });
-    } catch (error) {
-      return next(error);
-    }
-  },
-);
-
-app.delete(
-  "/api/alerts/:id",
-  requireAuth,
-  async (req: AuthRequest, res, next) => {
-    try {
-      const result = await prisma.priceAlert.deleteMany({
-        where: { id: String(req.params.id), userId: req.user!.id },
-      });
-      return result.count
-        ? res.status(204).send()
-        : res.status(404).json({ error: "Alert not found" });
-    } catch (error) {
-      return next(error);
-    }
-  },
-);
+app.use("/api/alerts", createAlertsRouter());
 
 app.get(
   "/api/admin/stats",
@@ -652,7 +595,11 @@ app.post(
   requireAdmin,
   async (_req, res, next) => {
     try {
-      return res.json({ data: await evaluatePriceAlerts() });
+      return res.json({
+        data: await (config.DURABLE_ALERTS_ENABLED
+          ? runDurableAlertBatch()
+          : evaluatePriceAlerts()),
+      });
     } catch (error) {
       return next(error);
     }
@@ -678,17 +625,26 @@ app.use(
             ? "Request is too large."
             : "Invalid JSON request.",
       });
-    console.error(
-      "API request failed:",
-      error instanceof Error ? error.name : "Unknown error",
-    );
-    return res
-      .status(500)
-      .json({ error: "An unexpected server error occurred" });
+    operationalLog({
+      event: "http-error",
+      requestId: res.locals.requestId,
+      errorType: "UnhandledError",
+    });
+    return res.status(500).json({
+      error: "An unexpected server error occurred",
+      requestId: res.locals.requestId,
+    });
   },
 );
 
-app.listen(port, () => {
+const server = app.listen(port, () => {
   startScheduler();
   console.log(`GameVault API listening on http://localhost:${port}`);
 });
+
+const lifecycle = installShutdown(
+  server,
+  stopScheduler,
+  () => prisma.$disconnect(),
+  () => schedulerStatus().running,
+);

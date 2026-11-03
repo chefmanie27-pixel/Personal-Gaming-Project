@@ -539,6 +539,242 @@ test(
         },
       );
       await t.test(
+        "collection collaborators require acceptance, obey roles and lose access on revocation",
+        async () => {
+          const v = {
+            name: "Private collaboration",
+            description: "Owner content",
+            cover: "",
+            theme: "RPG",
+            visibility: "private",
+            games: [game],
+          };
+          const c = (await api("/collections", 0, "POST", v)).body.data;
+          assert.equal((await api("/collections/" + c.id, 2)).status, 404);
+          assert.equal(
+            (
+              await api("/collections/" + c.id + "/members", 2, "POST", {
+                username: names[1],
+                role: "editor",
+              })
+            ).status,
+            404,
+          );
+          assert.equal(
+            (
+              await api("/collections/" + c.id + "/members", 0, "POST", {
+                username: names[2],
+                role: "viewer",
+              })
+            ).status,
+            200,
+          );
+          assert.equal((await api("/collections/" + c.id, 2)).status, 404);
+          assert.ok(
+            (await api("/collaborations", 2)).body.data.some(
+              (r: any) => r.collectionId === c.id && !r.accepted,
+            ),
+          );
+          await api("/collections/" + c.id + "/respond", 2, "POST", {
+            accept: true,
+          });
+          assert.equal(
+            (await api("/collections/" + c.id, 2)).body.data.permission,
+            "viewer",
+          );
+          assert.equal(
+            (
+              await api("/collections/" + c.id, 2, "PATCH", {
+                ...v,
+                name: "Hijack",
+                version: 0,
+              })
+            ).status,
+            403,
+          );
+          await api("/collections/" + c.id + "/members", 0, "POST", {
+            username: names[2],
+            role: "editor",
+          });
+          assert.equal((await api("/collections/" + c.id, 2)).status, 404);
+          await api("/collections/" + c.id + "/respond", 2, "POST", {
+            accept: true,
+          });
+          assert.equal(
+            (await api("/collections/" + c.id, 2)).body.data.permission,
+            "editor",
+          );
+          assert.equal(
+            (
+              await api("/collections/" + c.id, 2, "PATCH", {
+                ...v,
+                visibility: "public",
+                version: 0,
+              })
+            ).status,
+            403,
+          );
+          assert.equal(
+            (
+              await api("/collections/" + c.id, 2, "PATCH", {
+                ...v,
+                name: "Editor content",
+                version: 0,
+              })
+            ).status,
+            200,
+          );
+          assert.equal(
+            (await api("/collections/" + c.id + "?version=1", 2, "DELETE"))
+              .status,
+            409,
+          );
+          await api("/collections/" + c.id + "/members/" + ids[2], 0, "DELETE");
+          assert.equal((await api("/collections/" + c.id, 2)).status, 404);
+          assert.equal(
+            (
+              await api("/collections/" + c.id, 2, "PATCH", {
+                ...v,
+                version: 1,
+              })
+            ).status,
+            403,
+          );
+          assert.ok(
+            (await api("/notifications", 2)).body.data.every(
+              (r: any) => r.dedupe !== "invite:" + c.id,
+            ),
+          );
+          await api("/collections/" + c.id + "/members", 0, "POST", {
+            username: names[2],
+            role: "editor",
+          });
+          await api("/collections/" + c.id + "/respond", 2, "POST", {
+            accept: true,
+          });
+          await api("/blocks/" + ids[0], 2, "POST", {});
+          assert.equal((await api("/collections/" + c.id, 2)).status, 404);
+          assert.equal(
+            await prisma.collectionMember.count({
+              where: { collectionId: c.id, userId: ids[2] },
+            }),
+            0,
+          );
+          await api("/blocks/" + ids[0], 2, "DELETE");
+        },
+      );
+      await t.test(
+        "featured collections require a current administrator and public visibility",
+        async () => {
+          assert.equal(
+            (
+              await api(
+                "/collections/" + collection.id + "/feature",
+                0,
+                "POST",
+                { featured: true },
+              )
+            ).status,
+            403,
+          );
+          assert.equal(
+            (
+              await api(
+                "/collections/" + collection.id + "/feature",
+                3,
+                "POST",
+                { featured: true },
+              )
+            ).status,
+            200,
+          );
+          assert.ok(
+            (await api("/collections?featured=true")).body.data.some(
+              (c: any) => c.id === collection.id,
+            ),
+          );
+          const privateCollection = (
+            await api("/collections", 0, "POST", {
+              name: "Private",
+              description: "",
+              cover: "",
+              theme: "",
+              visibility: "private",
+              games: [],
+            })
+          ).body.data;
+          assert.equal(
+            (
+              await api(
+                "/collections/" + privateCollection.id + "/feature",
+                3,
+                "POST",
+                { featured: true },
+              )
+            ).status,
+            400,
+          );
+        },
+      );
+      await t.test(
+        "rarity uses public accounts and suggestions never read private library data",
+        async () => {
+          const a = (await api("/achievements", 0)).body.data;
+          const publicProfiles = await prisma.socialProfile.count({
+            where: { visibility: "public", userId: { notIn: [ids[1]] } },
+          });
+          assert.equal(a[0].rarity.population, publicProfiles);
+          assert.ok(
+            a.every(
+              (v: any) =>
+                v.rarity.percentage >= 0 && v.rarity.percentage <= 100,
+            ),
+          );
+          const r = await api("/suggestions", 2);
+          assert.equal(r.status, 200);
+          assert.ok(
+            r.body.data.every(
+              (p: any) => p.userId !== ids[2] && p.visibility === "public",
+            ),
+          );
+          assert.ok(!r.body.data.some((p: any) => p.userId === ids[1]));
+        },
+      );
+      await t.test(
+        "username aliases retain links and prevent handle takeover",
+        async () => {
+          const p = (await api("/me", 2)).body.data;
+          const v = profileSchema.parse(
+            Object.fromEntries(
+              Object.entries(p).filter(
+                ([k]) => !["userId", "createdAt", "updatedAt"].includes(k),
+              ),
+            ),
+          );
+          const newName = "r" + randomUUID().replaceAll("-", "").slice(0, 20);
+          assert.equal(
+            (await api("/me", 2, "PUT", { ...v, username: newName })).status,
+            200,
+          );
+          assert.equal(
+            (await api("/profiles/" + names[2])).body.data.username,
+            newName,
+          );
+          const other = (await api("/me", 3)).body.data;
+          const o = profileSchema.parse(
+            Object.fromEntries(
+              Object.entries(other).filter(
+                ([k]) => !["userId", "createdAt", "updatedAt"].includes(k),
+              ),
+            ),
+          );
+          assert.equal(
+            (await api("/me", 3, "PUT", { ...o, username: names[2] })).status,
+            409,
+          );
+        },
+      );
+      await t.test(
         "moderation hides content and invalidates old revisions",
         async () => {
           const report = (await api("/moderation/reports", 3)).body.data.find(

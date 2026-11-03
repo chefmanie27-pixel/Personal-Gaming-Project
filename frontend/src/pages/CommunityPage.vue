@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import DiscussionModeration from "../components/DiscussionModeration.vue";
+import GameDiscussions from "../components/GameDiscussions.vue";
+import CommunityReviews from "../components/CommunityReviews.vue";
 import { createRequestScope } from "../utils/requestScope";
 const scope = createRequestScope();
 import { ref, watch } from "vue";
@@ -10,13 +13,23 @@ import {
   type UserCard,
   type Publication,
 } from "../stores/social";
+const route = useRoute();
+const initialTab = String(route.query.tab ?? "Discover feed");
+const allowedTabs = [
+  "Discover feed",
+  "Following",
+  "People",
+  "Suggested players",
+  "Collections",
+  "Featured collections",
+  "Reviews",
+  "Discussions",
+  "Notifications",
+  "Moderation",
+];
 const social = useSocialStore(),
   auth = useAuthStore(),
-  tab = ref(
-    useRoute().query.tab === "Notifications"
-      ? "Notifications"
-      : "Discover feed",
-  ),
+  tab = ref(allowedTabs.includes(initialTab) ? initialTab : "Discover feed"),
   q = ref(""),
   busy = ref(false),
   error = ref(""),
@@ -24,20 +37,40 @@ const social = useSocialStore(),
   cursor = ref<string | null>(null),
   offset = ref<number | null>(0),
   unread = ref(0);
+watch(
+  () => route.query.tab,
+  (value) => {
+    const next = String(value ?? "Discover feed");
+    tab.value = allowedTabs.includes(next) ? next : "Discover feed";
+  },
+);
 async function load(more = false) {
   const current = scope.next();
   busy.value = true;
   error.value = "";
   try {
+    if (["Reviews", "Discussions"].includes(tab.value)) {
+      items.value = [];
+      cursor.value = null;
+      offset.value = null;
+      return;
+    }
     let path = "";
     const params = new URLSearchParams();
     if (more && cursor.value) params.set("cursor", cursor.value);
     params.set("q", q.value);
-    if (tab.value === "People") {
+    if (tab.value === "Suggested players") {
+      path = "/social/suggestions";
+    } else if (tab.value === "People") {
       params.set("offset", String(more ? (offset.value ?? 0) : 0));
       path = "/social/users";
-    } else if (tab.value === "Collections") path = "/social/collections";
-    else if (tab.value === "Notifications") path = "/social/notifications";
+    } else if (
+      tab.value === "Collections" ||
+      tab.value === "Featured collections"
+    ) {
+      path = "/social/collections";
+      if (tab.value === "Featured collections") params.set("featured", "true");
+    } else if (tab.value === "Notifications") path = "/social/notifications";
     else if (tab.value === "Moderation") path = "/social/moderation/reports";
     else {
       params.set("mode", tab.value === "Following" ? "following" : "public");
@@ -125,8 +158,12 @@ watch(
         v-for="t in [
           'Discover feed',
           'Following',
+          'Reviews',
+          'Discussions',
           'People',
+          'Suggested players',
           'Collections',
+          'Featured collections',
           ...(auth.user ? ['Notifications'] : []),
           ...(auth.user?.role === 'ADMIN' ? ['Moderation'] : []),
         ]"
@@ -139,7 +176,14 @@ watch(
       </button>
     </nav>
     <form
-      v-if="['People', 'Collections'].includes(tab)"
+      v-if="
+        [
+          'People',
+          'Suggested players',
+          'Collections',
+          'Featured collections',
+        ].includes(tab)
+      "
       class="social-toolbar"
       @submit.prevent="load()"
     >
@@ -152,7 +196,7 @@ watch(
       ><button class="button ghost" :disabled="busy">Search</button>
     </form>
     <RouterLink
-      v-if="tab === 'Collections' && social.me"
+      v-if="['Collections', 'Featured collections'].includes(tab) && social.me"
       to="/community/collections/new"
       class="button primary"
       >Publish a collection</RouterLink
@@ -167,6 +211,12 @@ watch(
         Mark all as read
       </button>
     </div>
+    <DiscussionModeration
+      v-if="tab === 'Moderation' && auth.user?.role === 'ADMIN'"
+    />
+    <CommunityReviews v-if="tab === 'Reviews'" /><GameDiscussions
+      v-if="tab === 'Discussions'"
+    />
     <p v-if="error" class="form-error" role="alert">
       {{ error }}
       <button class="button ghost" :disabled="busy" @click="load()">
@@ -176,7 +226,10 @@ watch(
     <p v-if="busy" role="status">Loading community...</p>
     <div :class="['People', 'Collections'].includes(tab) ? 'social-grid' : ''">
       <template v-for="item in items" :key="item.id ?? item.userId"
-        ><article v-if="tab === 'People'" class="account-panel">
+        ><article
+          v-if="['People', 'Suggested players'].includes(tab)"
+          class="account-panel"
+        >
           <RouterLink :to="'/u/' + item.username" class="social-person"
             ><img
               v-if="item.avatar"
@@ -188,6 +241,9 @@ watch(
             <div>
               <h2>{{ item.name }}</h2>
               <p>@{{ item.username }}</p>
+              <p v-if="tab === 'Suggested players'" class="muted">
+                {{ item.sharedGames }} shared games from public libraries
+              </p>
               <small>{{
                 item.visibility === "private"
                   ? "Private account"
@@ -197,7 +253,7 @@ watch(
           >
         </article>
         <RouterLink
-          v-else-if="tab === 'Collections'"
+          v-else-if="['Collections', 'Featured collections'].includes(tab)"
           :to="'/community/collections/' + item.id"
           class="account-panel social-collection-link"
           ><img
@@ -219,10 +275,16 @@ watch(
           <small>{{ new Date(item.createdAt).toLocaleString() }}</small>
           <div class="hero-actions">
             <RouterLink
-              v-if="item.kind === 'request'"
+              v-if="item.kind === 'price-alert'"
+              to="/account"
+              class="button ghost"
+              >View price alerts</RouterLink
+            >
+            <RouterLink
+              v-if="['request', 'invitation'].includes(item.kind)"
               to="/social/studio"
               class="button ghost"
-              >Review follow requests</RouterLink
+              >Review requests and invitations</RouterLink
             ><button
               v-if="!item.readAt"
               class="button ghost"
@@ -276,7 +338,15 @@ watch(
         </article></template
       >
     </div>
-    <p v-if="!items.length && !busy && !error" class="empty-state">
+    <p
+      v-if="
+        !items.length &&
+        !busy &&
+        !error &&
+        !['Reviews', 'Discussions'].includes(tab)
+      "
+      class="empty-state"
+    >
       {{
         tab === "Following"
           ? "Follow players to see their shared activity."

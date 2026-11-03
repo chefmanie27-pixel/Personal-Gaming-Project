@@ -25,10 +25,15 @@ const minScore = ref("");
 const year = ref("");
 const developer = ref("");
 const localSort = ref("");
+const maxPrice = ref(""),
+  availability = ref("");
 const visibleGames = computed(() => {
   const result = games.value.filter(
     (g) =>
       (!year.value || releaseYear(g.releaseDate) === year.value) &&
+      (!availability.value || g.status === availability.value) &&
+      (!maxPrice.value ||
+        (g.price !== null && g.price <= Number(maxPrice.value))) &&
       (!developer.value ||
         g.developer.toLowerCase().includes(developer.value.toLowerCase())) &&
       (!minScore.value ||
@@ -177,6 +182,27 @@ onBeforeUnmount(() => {
     </p>
     <details class="storefront-details">
       <summary>Advanced filters on loaded results</summary>
+      <p class="muted">
+        These filters use only games already loaded below. Load more pages to
+        widen the candidate pool. Unknown scores and prices cannot match
+        score/price thresholds.
+      </p>
+      <div class="filters">
+        <label
+          >Maximum price, ZAR (loaded results)<input
+            v-model="maxPrice"
+            type="number"
+            min="0"
+            max="1000000"
+            step="0.01" /></label
+        ><label
+          >Release availability (loaded results)<select v-model="availability">
+            <option value="">Any release status</option>
+            <option value="released">Released</option>
+            <option value="upcoming">Upcoming</option>
+          </select></label
+        >
+      </div>
       <div class="filters">
         <label
           >Release year<input
@@ -266,6 +292,8 @@ onBeforeUnmount(() => {
         minScore = '';
         developer = '';
         localSort = '';
+        maxPrice = '';
+        availability = '';
       "
     >
       Reset filters
@@ -277,7 +305,11 @@ onBeforeUnmount(() => {
       >. Store links appear on game details.
     </p>
     <div class="results-label">
-      <span>{{ games.length }} loaded / {{ total }} source results</span
+      <span
+        >{{ visibleGames.length }} matches in {{ games.length }} loaded
+        games<span v-if="Number.isFinite(total) && total > 0">
+          / {{ total }} provider results before loaded-result filters</span
+        ></span
       ><span>{{ scope }}</span>
     </div>
     <div class="card-grid">

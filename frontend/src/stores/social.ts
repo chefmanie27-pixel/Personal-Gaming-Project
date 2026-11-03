@@ -9,6 +9,8 @@ export interface SocialSettings {
   showRecommendations: boolean;
   showStats: boolean;
   notifications: boolean;
+  dashboardWidgets?: Array<"stats" | "status" | "genres" | "ratings">;
+  homeSections?: Array<"popular" | "rated" | "recent" | "upcoming" | "more">;
 }
 export interface SocialProfile {
   userId: string;
@@ -65,6 +67,8 @@ export interface Publication {
   author?: UserCard;
   followers?: number;
   followed?: boolean;
+  permission?: "owner" | "editor" | "viewer";
+  featured?: boolean;
 }
 export const defaults = (): SocialSettings => ({
   accent: "violet",
@@ -73,6 +77,8 @@ export const defaults = (): SocialSettings => ({
   showRecommendations: true,
   showStats: true,
   notifications: true,
+  dashboardWidgets: ["stats", "status", "genres", "ratings"],
+  homeSections: ["popular", "rated", "recent", "upcoming", "more"],
 });
 export const socialClient = axios.create({
   baseURL: import.meta.env?.VITE_API_URL ?? "http://localhost:3000/api",

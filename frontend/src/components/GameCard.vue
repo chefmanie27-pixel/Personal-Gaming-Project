@@ -31,6 +31,9 @@ const discount = (game: Game) =>
           :title="game.title"
         />
         <StorefrontBadges :game="game" />
+        <span v-if="library.find(game.slug)" class="card-library-status">{{
+          library.find(game.slug)?.status
+        }}</span>
         <span v-if="discount(game)" class="discount"
           >-{{ discount(game) }}%</span
         >

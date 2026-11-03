@@ -29,6 +29,15 @@ function collection(id: string, checked: boolean) {
             })
           " /></label
       ><label
+        >Target completion date (optional)<input
+          type="date"
+          :value="workspace.meta(slug).targetDate ?? ''"
+          @change="
+            workspace.setMeta(slug, {
+              targetDate: ($event.target as HTMLInputElement).value || null,
+            })
+          " /></label
+      ><label
         >Priority<select
           :value="workspace.meta(slug).priority"
           @change="

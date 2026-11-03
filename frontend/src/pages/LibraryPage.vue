@@ -27,12 +27,11 @@ async function bulk() {
     )
   )
     return;
-  for (const slug of selected.value) {
-    await library.update(slug, {
-      status: bulkStatus.value as (typeof statuses)[number],
-    });
-    if (library.syncError) return;
-  }
+  await library.bulkStatus(
+    selected.value,
+    bulkStatus.value as (typeof statuses)[number],
+  );
+  if (library.syncError) return;
   selected.value = [];
 }
 const status = ref(route.name === "backlog" ? "Want to Play" : "");
@@ -124,6 +123,9 @@ const results = computed(() =>
         Import device collection
       </button>
     </section>
+    <RouterLink class="button ghost" to="/goals"
+      >Private goals and activity</RouterLink
+    >
     <div class="hero-actions">
       <RouterLink class="button ghost" to="/collections"
         >Manage collections</RouterLink

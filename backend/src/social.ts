@@ -1,3 +1,4 @@
+import { config } from "./config.js";
 import {
   Router,
   type Request,
@@ -34,6 +35,13 @@ export const artwork = z
   .max(1024)
   .refine((v) => {
     if (!v) return true;
+    if (
+      v.startsWith(config.PUBLIC_API_ORIGIN + "/api/artwork/") &&
+      /^[a-z0-9]{20,40}$/.test(
+        v.slice((config.PUBLIC_API_ORIGIN + "/api/artwork/").length),
+      )
+    )
+      return true;
     try {
       const u = new URL(v);
       return u.protocol === "https:" && !u.username && !u.password;
@@ -49,6 +57,16 @@ export const settingsSchema = z
     showRecommendations: z.boolean().default(true),
     showStats: z.boolean().default(true),
     notifications: z.boolean().default(true),
+    dashboardWidgets: z
+      .array(z.enum(["stats", "status", "genres", "ratings"]))
+      .max(4)
+      .default(["stats", "status", "genres", "ratings"])
+      .refine((v) => new Set(v).size === v.length),
+    homeSections: z
+      .array(z.enum(["popular", "rated", "recent", "upcoming", "more"]))
+      .max(5)
+      .default(["popular", "rated", "recent", "upcoming", "more"])
+      .refine((v) => new Set(v).size === v.length),
   })
   .strict();
 export const profileSchema = z
@@ -219,7 +237,7 @@ export async function canView(db: DB, owner: string, viewer?: string) {
     )
   );
 }
-async function visibleUsers(
+export async function visibleUsers(
   db: DB,
   viewer?: string,
 ): Promise<Prisma.UserWhereInput> {
@@ -355,6 +373,23 @@ async function reviewDto(
     ),
   };
 }
+export async function collectionAccess(
+  db: DB,
+  c: { id: string; userId: string; visibility: string },
+  viewer?: string,
+): Promise<"owner" | "editor" | "viewer" | null> {
+  if (c.userId === viewer) return "owner";
+  if (viewer && (await blockedIds(db, viewer)).includes(c.userId)) return null;
+  if (viewer) {
+    const m = await db.collectionMember.findUnique({
+      where: { collectionId_userId: { collectionId: c.id, userId: viewer } },
+    });
+    if (m?.accepted) return m.role === "editor" ? "editor" : "viewer";
+  }
+  return c.visibility === "public" && (await canView(db, c.userId, viewer))
+    ? "viewer"
+    : null;
+}
 export function createSocialRouter(client: PrismaClient = prisma) {
   const router = Router();
   router.use((req: AuthRequest, res, next) => {
@@ -429,7 +464,18 @@ export function createSocialRouter(client: PrismaClient = prisma) {
     const v = input(profileSchema, req.body),
       id = req.user!.id;
     const { version, ...data } = v;
+    const reserved = await db.usernameAlias.findUnique({
+      where: { username: data.username },
+    });
+    if (reserved && reserved.userId !== id)
+      fail(409, "That username is reserved by an existing profile.");
     const old = await db.socialProfile.findUnique({ where: { userId: id } });
+    if (old && old.username !== data.username)
+      await db.usernameAlias.upsert({
+        where: { username: old.username },
+        create: { username: old.username, userId: id },
+        update: {},
+      });
     if (old) {
       if (
         !(
@@ -478,7 +524,16 @@ export function createSocialRouter(client: PrismaClient = prisma) {
   });
   route("get", "/profiles/:username", false, async (db, req) => {
     const name = input(username, req.params.username);
-    const p = await db.socialProfile.findUnique({ where: { username: name } });
+    let p = await db.socialProfile.findUnique({ where: { username: name } });
+    if (!p) {
+      const alias = await db.usernameAlias.findUnique({
+        where: { username: name },
+      });
+      if (alias)
+        p = await db.socialProfile.findUnique({
+          where: { userId: alias.userId },
+        });
+    }
     if (!p) fail(404, "Profile not found.");
     const viewer = req.user?.id;
     if ((await blockedIds(db, viewer)).includes(p.userId))
@@ -671,6 +726,10 @@ export function createSocialRouter(client: PrismaClient = prisma) {
   });
   route("get", "/requests", true, async (db, req) => {
     const blocked = await blockedIds(db, req.user!.id);
+    const offset = input(
+      z.coerce.number().int().min(0).max(100000).default(0),
+      req.query.offset,
+    );
     const rows = await db.followEdge.findMany({
       where: {
         followedId: req.user!.id,
@@ -679,12 +738,18 @@ export function createSocialRouter(client: PrismaClient = prisma) {
       },
       include: { follower: { include: { socialProfile: true } } },
       orderBy: { createdAt: "desc" },
-      take: 100,
+      skip: offset,
+      take: 21,
     });
     return {
-      data: rows.flatMap((r) =>
-        r.follower.socialProfile ? [profileCard(r.follower.socialProfile)] : [],
-      ),
+      nextOffset: rows.length > 20 ? offset + 20 : null,
+      data: rows
+        .slice(0, 20)
+        .flatMap((r) =>
+          r.follower.socialProfile
+            ? [profileCard(r.follower.socialProfile)]
+            : [],
+        ),
     };
   });
   route("post", "/requests/:id", true, async (db, req) => {
@@ -727,6 +792,14 @@ export function createSocialRouter(client: PrismaClient = prisma) {
         ],
       },
     });
+    await db.collectionMember.deleteMany({
+      where: {
+        OR: [
+          { userId: me, collection: { userId: id } },
+          { userId: id, collection: { userId: me } },
+        ],
+      },
+    });
     await db.reviewLike.deleteMany({
       where: {
         OR: [
@@ -752,20 +825,28 @@ export function createSocialRouter(client: PrismaClient = prisma) {
       },
     });
   });
-  route("get", "/blocks", true, async (db, req) => ({
-    data: (
-      await db.blockEdge.findMany({
-        where: { blockerId: req.user!.id },
-        include: { blocked: { include: { socialProfile: true } } },
-        take: 500,
-      })
-    ).map((r) => ({
-      userId: r.blockedId,
-      profile: r.blocked.socialProfile
-        ? profileCard(r.blocked.socialProfile)
-        : null,
-    })),
-  }));
+  route("get", "/blocks", true, async (db, req) => {
+    const offset = input(
+      z.coerce.number().int().min(0).max(100000).default(0),
+      req.query.offset,
+    );
+    const rows = await db.blockEdge.findMany({
+      where: { blockerId: req.user!.id },
+      include: { blocked: { include: { socialProfile: true } } },
+      orderBy: [{ createdAt: "desc" }, { blockedId: "desc" }],
+      skip: offset,
+      take: 21,
+    });
+    return {
+      data: rows.slice(0, 20).map((r) => ({
+        userId: r.blockedId,
+        profile: r.blocked.socialProfile
+          ? profileCard(r.blocked.socialProfile)
+          : null,
+      })),
+      nextOffset: rows.length > 20 ? offset + 20 : null,
+    };
+  });
   route("delete", "/blocks/:id", true, async (db, req) => {
     await db.blockEdge.deleteMany({
       where: { blockerId: req.user!.id, blockedId: String(req.params.id) },
@@ -1024,8 +1105,15 @@ export function createSocialRouter(client: PrismaClient = prisma) {
     });
   });
   route("post", "/reviews/:id/report", true, async (db, req) => {
-    const { reason } = input(
-      z.object({ reason: z.string().trim().min(3).max(1000) }).strict(),
+    const { reason, category } = input(
+      z
+        .object({
+          reason: z.string().trim().min(3).max(1000),
+          category: z
+            .enum(["spam", "harassment", "spoilers", "other"])
+            .default("other"),
+        })
+        .strict(),
       req.body,
     );
     const r = await db.communityReview.findFirst({
@@ -1034,7 +1122,13 @@ export function createSocialRouter(client: PrismaClient = prisma) {
     if (!r) fail(404, "Review not found.");
     await target(db, r.userId, req.user!.id);
     await db.reviewReport.createMany({
-      data: [{ userId: req.user!.id, reviewId: r.id, reason }],
+      data: [
+        {
+          userId: req.user!.id,
+          reviewId: r.id,
+          reason: "[" + category + "] " + reason.slice(0, 980),
+        },
+      ],
       skipDuplicates: true,
     });
   });
@@ -1097,6 +1191,7 @@ export function createSocialRouter(client: PrismaClient = prisma) {
       where: {
         AND: [p.after],
         ...(owner ? { userId: owner.userId } : {}),
+        ...(req.query.featured === "true" ? { featured: true } : {}),
         ...(owner?.userId === req.user?.id && req.query.username
           ? {}
           : { visibility: "public" }),
@@ -1131,12 +1226,13 @@ export function createSocialRouter(client: PrismaClient = prisma) {
     const c = await db.publishedCollection.findUnique({
       where: { id: String(req.params.id) },
     });
-    if (!c || (c.visibility !== "public" && c.userId !== req.user?.id))
-      fail(404, "Collection unavailable.");
-    await target(db, c.userId, req.user?.id);
+    if (!c) fail(404, "Collection unavailable.");
+    const permission = await collectionAccess(db, c, req.user?.id);
+    if (!permission) fail(404, "Collection unavailable.");
     return {
       data: {
         ...c,
+        permission,
         author: profileCard(await actor(db, c.userId)),
         followers: await db.collectionFollow.count({
           where: { collectionId: c.id },
@@ -1175,23 +1271,30 @@ export function createSocialRouter(client: PrismaClient = prisma) {
   route("patch", "/collections/:id", true, async (db, req) => {
     const v = input(collectionSchema, req.body),
       { version, id, ...data } = v;
+    const existing = await db.publishedCollection.findUnique({
+      where: { id: String(req.params.id) },
+    });
+    if (!existing) fail(404, "Collection unavailable.");
+    const permission = await collectionAccess(db, existing, req.user!.id);
+    if (permission !== "owner" && permission !== "editor")
+      fail(
+        403,
+        "Only the owner or an accepted editor can edit this collection.",
+      );
+    if (permission === "editor" && data.visibility !== existing.visibility)
+      fail(403, "Only the owner can change visibility.");
+    const ownerId = existing.userId;
     const c = await db.publishedCollection.updateMany({
-      where: { id: String(req.params.id), userId: req.user!.id, version },
+      where: { id: String(req.params.id), userId: ownerId, version },
       data: { ...data, version: { increment: 1 } },
     });
     if (!c.count)
       fail(409, "Collection changed or is unavailable. Reload first.");
     if (v.visibility === "public") {
-      await activity(
-        db,
-        req.user!.id,
-        "collection",
-        String(req.params.id),
-        v.name,
-      );
+      await activity(db, ownerId, "collection", String(req.params.id), v.name);
       await db.socialActivity.updateMany({
         where: {
-          userId: req.user!.id,
+          userId: ownerId,
           kind: "collection",
           entityId: String(req.params.id),
         },
@@ -1200,12 +1303,12 @@ export function createSocialRouter(client: PrismaClient = prisma) {
     } else
       await db.socialActivity.deleteMany({
         where: {
-          userId: req.user!.id,
+          userId: ownerId,
           kind: "collection",
           entityId: String(req.params.id),
         },
       });
-    await awardAchievements(db, req.user!.id);
+    await awardAchievements(db, ownerId);
     return {
       data: await db.publishedCollection.findUnique({
         where: { id: String(req.params.id) },
@@ -1246,9 +1349,36 @@ export function createSocialRouter(client: PrismaClient = prisma) {
       where: { userId: req.user!.id, collectionId: String(req.params.id) },
     });
   });
-  route("get", "/achievements", true, async (db, req) => ({
-    data: await awardAchievements(db, req.user!.id),
-  }));
+  route("get", "/achievements", true, async (db, req) => {
+    const data = await awardAchievements(db, req.user!.id),
+      blocked = await blockedIds(db, req.user!.id),
+      where = {
+        socialProfile: { is: { visibility: "public" } },
+        id: { notIn: blocked },
+      };
+    const population = await db.user.count({ where });
+    const counts = await db.achievementUnlock.groupBy({
+      by: ["key"],
+      where: { user: where },
+      _count: { userId: true },
+    });
+    const map = new Map(counts.map((c) => [c.key, c._count.userId]));
+    return {
+      data: data.map((a) => ({
+        ...a,
+        rarity: population
+          ? {
+              population,
+              unlocked: map.get(a.key) ?? 0,
+              percentage:
+                Math.round(((map.get(a.key) ?? 0) / population) * 10000) / 100,
+            }
+          : null,
+      })),
+      scope:
+        "Rarity uses public profiles visible to you, not private accounts.",
+    };
+  });
   route("get", "/notifications", true, async (db, req) => {
     const p = pagination(req),
       blocked = await blockedIds(db, req.user!.id),
@@ -1277,6 +1407,230 @@ export function createSocialRouter(client: PrismaClient = prisma) {
       where: { userId: req.user!.id, ...(id ? { id } : {}), readAt: null },
       data: { readAt: new Date() },
     });
+  });
+
+  route("get", "/collaborations", true, async (db, req) => {
+    const blocked = await blockedIds(db, req.user!.id),
+      offset = input(
+        z.coerce.number().int().min(0).max(100000).default(0),
+        req.query.offset,
+      );
+    const rows = await db.collectionMember.findMany({
+      where: {
+        userId: req.user!.id,
+        collection: { userId: { notIn: blocked } },
+      },
+      include: {
+        collection: { include: { user: { include: { socialProfile: true } } } },
+      },
+      orderBy: [{ createdAt: "desc" }, { collectionId: "desc" }],
+      skip: offset,
+      take: 21,
+    });
+    return {
+      data: rows.slice(0, 20).map((m) => ({
+        collectionId: m.collectionId,
+        role: m.role,
+        accepted: m.accepted,
+        name: m.collection.name,
+        owner: m.collection.user.socialProfile
+          ? profileCard(m.collection.user.socialProfile)
+          : null,
+      })),
+      nextOffset: rows.length > 20 ? offset + 20 : null,
+    };
+  });
+  route("get", "/collections/:id/members", true, async (db, req) => {
+    const c = await db.publishedCollection.findUnique({
+      where: { id: String(req.params.id) },
+    });
+    if (!c || c.userId !== req.user!.id) fail(404, "Collection unavailable.");
+    const rows = await db.collectionMember.findMany({
+      where: { collectionId: c.id },
+      include: { user: { include: { socialProfile: true } } },
+      orderBy: { createdAt: "asc" },
+      take: 25,
+    });
+    return {
+      data: rows.map((m) => ({
+        userId: m.userId,
+        role: m.role,
+        accepted: m.accepted,
+        profile: m.user.socialProfile
+          ? profileCard(m.user.socialProfile)
+          : null,
+      })),
+    };
+  });
+  route("post", "/collections/:id/members", true, async (db, req) => {
+    const v = input(
+        z.object({ username, role: z.enum(["viewer", "editor"]) }).strict(),
+        req.body,
+      ),
+      c = await db.publishedCollection.findUnique({
+        where: { id: String(req.params.id) },
+      });
+    if (!c || c.userId !== req.user!.id) fail(404, "Collection unavailable.");
+    const p = await db.socialProfile.findUnique({
+      where: { username: v.username },
+    });
+    if (!p || (await blockedIds(db, req.user!.id)).includes(p.userId))
+      fail(404, "User unavailable.");
+    if (p.userId === c.userId) fail(400, "The owner already has access.");
+    const old = await db.collectionMember.findUnique({
+      where: { collectionId_userId: { collectionId: c.id, userId: p.userId } },
+    });
+    if (
+      !old &&
+      (await db.collectionMember.count({ where: { collectionId: c.id } })) >= 25
+    )
+      fail(400, "A collection supports up to 25 collaborators.");
+    // Role changes require renewed acceptance, preventing a viewer from silently becoming an editor.
+    await db.collectionMember.upsert({
+      where: { collectionId_userId: { collectionId: c.id, userId: p.userId } },
+      create: { collectionId: c.id, userId: p.userId, role: v.role },
+      update: old?.role === v.role ? {} : { role: v.role, accepted: false },
+    });
+    if (
+      (!old || old.role !== v.role) &&
+      settingsSchema.parse(p.settings).notifications
+    )
+      await db.socialNotification.deleteMany({
+        where: { userId: p.userId, dedupe: "invite:" + c.id },
+      });
+    await notify(
+      db,
+      p.userId,
+      "invite:" + c.id,
+      "invitation",
+      "You were invited to collaborate on a collection.",
+      c.userId,
+      c.id,
+    );
+    return { success: true };
+  });
+  route("post", "/collections/:id/respond", true, async (db, req) => {
+    const { accept } = input(
+        z.object({ accept: z.boolean() }).strict(),
+        req.body,
+      ),
+      id = String(req.params.id),
+      me = req.user!.id;
+    const m = await db.collectionMember.findUnique({
+      where: { collectionId_userId: { collectionId: id, userId: me } },
+      include: { collection: true },
+    });
+    if (!m || (await blockedIds(db, me)).includes(m.collection.userId))
+      fail(404, "Invitation unavailable.");
+    if (accept)
+      await db.collectionMember.update({
+        where: { collectionId_userId: { collectionId: id, userId: me } },
+        data: { accepted: true },
+      });
+    else
+      await db.collectionMember.delete({
+        where: { collectionId_userId: { collectionId: id, userId: me } },
+      });
+    await db.socialNotification.updateMany({
+      where: { userId: me, dedupe: "invite:" + id },
+      data: { readAt: new Date() },
+    });
+    return { success: true };
+  });
+  route("delete", "/collections/:id/members/:userId", true, async (db, req) => {
+    const c = await db.publishedCollection.findUnique({
+        where: { id: String(req.params.id) },
+      }),
+      member = String(req.params.userId);
+    if (!c || (c.userId !== req.user!.id && member !== req.user!.id))
+      fail(404, "Collection unavailable.");
+    await db.collectionMember.deleteMany({
+      where: { collectionId: c.id, userId: member },
+    });
+    await db.socialNotification.deleteMany({
+      where: { userId: member, dedupe: "invite:" + c.id },
+    });
+  });
+  route("post", "/collections/:id/feature", true, async (db, req) => {
+    if (
+      (
+        await db.user.findUniqueOrThrow({
+          where: { id: req.user!.id },
+          select: { role: true },
+        })
+      ).role !== "ADMIN"
+    )
+      fail(403, "Administrator access required.");
+    const { featured } = input(
+      z.object({ featured: z.boolean() }).strict(),
+      req.body,
+    );
+    const c = await db.publishedCollection.findUnique({
+      where: { id: String(req.params.id) },
+    });
+    if (!c) fail(404, "Collection unavailable.");
+    if (
+      featured &&
+      (c.visibility !== "public" || !(await canView(db, c.userId)))
+    )
+      fail(400, "Only public collections on public profiles can be featured.");
+    await db.publishedCollection.update({
+      where: { id: c.id },
+      data: { featured },
+    });
+  });
+  route("get", "/suggestions", true, async (db, req) => {
+    const me = req.user!.id,
+      blocked = await blockedIds(db, me),
+      followed = await db.followEdge.findMany({
+        where: { followerId: me },
+        select: { followedId: true },
+      });
+    // Only use explicit public library sharing, and never read another user's private genres.
+    const own = await db.libraryEntry.findMany({
+      where: { userId: me },
+      select: { slug: true },
+      take: 500,
+    });
+    const slugs = own.map((g) => g.slug);
+    const candidates = await db.socialProfile.findMany({
+      where: {
+        userId: {
+          notIn: [me, ...blocked, ...followed.map((f) => f.followedId)],
+        },
+        visibility: "public",
+      },
+      orderBy: { username: "asc" },
+      take: 200,
+    });
+    const overlap = slugs.length
+      ? await db.libraryEntry.groupBy({
+          by: ["userId"],
+          where: {
+            userId: {
+              in: candidates.filter((c) => c.shareLibrary).map((c) => c.userId),
+            },
+            slug: { in: slugs },
+          },
+          _count: { slug: true },
+        })
+      : [];
+    const counts = new Map(overlap.map((o) => [o.userId, o._count.slug]));
+    return {
+      data: candidates
+        .map((p) => ({
+          ...profileCard(p),
+          sharedGames: counts.get(p.userId) ?? 0,
+        }))
+        .sort(
+          (a, b) =>
+            b.sharedGames - a.sharedGames ||
+            a.username.localeCompare(b.username),
+        )
+        .slice(0, 12),
+      scope:
+        "Ranked by shared storefront game IDs from publicly shared libraries; up to 200 candidate profiles.",
+    };
   });
   return router;
 }

@@ -4,6 +4,7 @@ import axios from "axios";
 import type { Game } from "../types";
 export interface GameMeta {
   completedAt: string | null;
+  targetDate?: string | null;
   priority: "Low" | "Normal" | "High";
   collectionIds: string[];
 }
@@ -20,11 +21,36 @@ export interface JournalItem {
   spoiler: boolean;
   rating: number | null;
 }
+export interface RecommendationFeedback {
+  choice: "interested" | "not-interested" | "less-like";
+  genres: string[];
+  title: string;
+  at: string;
+}
+export interface GamingGoal {
+  challengeKey?: "monthly-three" | "session-ten" | "time-300";
+  id: string;
+  title: string;
+  kind: "completed" | "sessions" | "minutes";
+  target: number;
+  start: string;
+  end: string;
+}
 export interface Workspace {
+  goals?: GamingGoal[];
   profile: { name: string; bio: string };
   preferences: {
     genres: string[];
     platforms: string[];
+    priceAlertRules?: Record<
+      string,
+      {
+        mode: "target" | "percentage" | "historical-low";
+        percent: number;
+        cooldownHours: number;
+      }
+    >;
+    recommendationFeedback?: Record<string, RecommendationFeedback>;
     libraryView?: "grid" | "list";
     librarySort?: "added" | "title" | "rating" | "priority";
   };
@@ -166,6 +192,27 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     });
     return queue.then(() => success);
   }
+  function feedback(
+    game: Game,
+    choice: RecommendationFeedback["choice"] | null,
+  ) {
+    return change((d) => {
+      const records = { ...d.preferences.recommendationFeedback };
+      if (choice)
+        records[game.slug] = {
+          choice,
+          genres: game.genres.slice(0, 10),
+          title: game.title,
+          at: new Date().toISOString(),
+        };
+      else delete records[game.slug];
+      d.preferences.recommendationFeedback = Object.fromEntries(
+        Object.entries(records)
+          .sort((a, b) => b[1].at.localeCompare(a[1].at))
+          .slice(0, 500),
+      );
+    });
+  }
   function meta(slug: string): GameMeta {
     return (
       data.value.metadata[slug] ?? {
@@ -224,6 +271,22 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         ).values(),
       ];
       d.metadata = { ...saved.metadata, ...d.metadata };
+      if (saved.goals?.length)
+        d.goals = [
+          ...new Map(
+            [...(saved.goals ?? []), ...(d.goals ?? [])].map((g) => [g.id, g]),
+          ).values(),
+        ].slice(0, 50);
+      const feedback = {
+        ...saved.preferences.recommendationFeedback,
+        ...d.preferences.recommendationFeedback,
+      };
+      if (Object.keys(feedback).length)
+        d.preferences.recommendationFeedback = Object.fromEntries(
+          Object.entries(feedback)
+            .sort((a, b) => b[1].at.localeCompare(a[1].at))
+            .slice(0, 500),
+        );
       d.journal =
         journalMode.value === "normalized"
           ? []
@@ -254,6 +317,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     change,
     meta,
     setMeta,
+    feedback,
     toggleWatch,
     importDevice,
   };
