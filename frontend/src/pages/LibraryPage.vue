@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, ref, watch, onBeforeUnmount } from "vue";
 import { useRoute } from "vue-router";
+import { useAuthStore } from "../stores/auth";
 import { statuses, useLibraryStore } from "../stores/library";
 import GameCard from "../components/GameCard.vue";
 import { useWorkspaceStore } from "../stores/workspace";
 const workspace = useWorkspaceStore();
 const library = useLibraryStore();
+const auth = useAuthStore();
 const route = useRoute();
 const search = ref("");
 const genre = ref("");
@@ -16,7 +18,26 @@ const collection = ref(
 );
 const selected = ref<string[]>([]);
 const bulkStatus = ref("Want to Play");
+let selectionSession = 0;
+watch(
+  () => [auth.token, library.accountId, workspace.sessionKey],
+  () => {
+    selectionSession++;
+    selected.value = [];
+    bulkStatus.value = "Want to Play";
+  },
+  { immediate: true },
+);
+onBeforeUnmount(() => {
+  selectionSession++;
+});
 async function bulk() {
+  if (
+    library.pending ||
+    !["local", "ready"].includes(library.syncState) ||
+    (!library.accountId && library.storageError)
+  )
+    return;
   if (
     !selected.value.length ||
     selected.value.length > 20 ||
@@ -27,12 +48,15 @@ async function bulk() {
     )
   )
     return;
+  const session = selectionSession,
+    submitted = [...selected.value];
   await library.bulkStatus(
-    selected.value,
+    submitted,
     bulkStatus.value as (typeof statuses)[number],
   );
-  if (library.syncError) return;
-  selected.value = [];
+  if (session !== selectionSession || library.syncError || (!library.accountId && library.storageError))
+    return;
+  selected.value = selected.value.filter((slug) => !submitted.includes(slug));
 }
 const status = ref(route.name === "backlog" ? "Want to Play" : "");
 const sort = ref("added");
@@ -206,7 +230,11 @@ const results = computed(() =>
       ><button
         class="button ghost"
         :disabled="
-          !selected.length || selected.length > 20 || !!library.pending
+          !selected.length ||
+          selected.length > 20 ||
+          !!library.pending ||
+          !['local', 'ready'].includes(library.syncState) ||
+          !!(!library.accountId && library.storageError)
         "
         @click="bulk"
       >

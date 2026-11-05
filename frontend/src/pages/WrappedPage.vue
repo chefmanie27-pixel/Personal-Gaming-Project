@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, ref } from "vue";
 import { useLibraryStore } from "../stores/library";
 import { useWorkspaceStore } from "../stores/workspace";
+import { useAnnualSummaries } from "../composables/useAnnualSummaries";
 import { annualStats } from "../utils/platform";
 import { useJournalStore } from "../stores/journal";
 const journal = useJournalStore();
@@ -10,31 +11,15 @@ const library = useLibraryStore(),
 const year = ref(new Date().getFullYear()),
   includeTime = ref(false),
   includeTitles = ref(false);
-watch(
-  [
-    year,
-    () => journal.ready,
-    () => workspace.sessionKey,
-    () => workspace.journalMode,
-  ],
-  () => {
-    if (
-      Number.isInteger(year.value) &&
-      year.value >= 1970 &&
-      year.value <= 2100
-    )
-      void journal.loadSummary(year.value);
-  },
-  { immediate: true },
-);
+const annual = useAnnualSummaries(year);
 const validYear = computed(
   () =>
     Number.isInteger(year.value) && year.value >= 1970 && year.value <= 2100,
 );
 const stats = computed(() => {
   const base = annualStats(library.entries, workspace.data, year.value);
-  if (!journal.remote || !journal.summary) return base;
-  const summary = journal.summary;
+  if (!journal.remote || !annual.selected.value) return base;
+  const summary = annual.selected.value;
   return {
     ...base,
     minutes: summary.minutes,
@@ -46,6 +31,12 @@ const stats = computed(() => {
     mostPlayed: summary.mostPlayed,
     highestRated: summary.highestRated,
   };
+});
+const previousStats = computed(() => {
+  const base = annualStats(library.entries, workspace.data, year.value - 1);
+  if (!journal.remote) return base;
+  if (!annual.previous.value) return null;
+  return { ...base, minutes: annual.previous.value.minutes };
 });
 function exportCard() {
   const canvas = document.createElement("canvas");
@@ -130,14 +121,14 @@ function exportCard() {
       Load your workspace and library to view annual statistics.
     </p>
     <p
-      v-else-if="journal.remote && (journal.summaryLoading || !journal.summary)"
-      :role="journal.summaryError ? 'alert' : 'status'"
+      v-else-if="journal.remote && (annual.loading.value || !annual.selected.value)"
+      :role="annual.error.value ? 'alert' : 'status'"
     >
-      {{ journal.summaryError || "Loading annual journal statistics..." }}
+      {{ annual.error.value || "Loading annual journal statistics..." }}
       <button
-        v-if="journal.summaryError"
+        v-if="annual.error.value"
         class="button ghost"
-        @click="journal.loadSummary(year)"
+        @click="annual.load()"
       >
         Retry summary
       </button>
@@ -158,6 +149,20 @@ function exportCard() {
           <p>{{ stats.highestRated?.game.title ?? "No dated review yet" }}</p>
         </article>
       </div>
+      <section v-if="year > 1970" class="account-panel" aria-labelledby="year-comparison">
+        <h2 id="year-comparison">Compared with {{ year - 1 }}</h2>
+        <p class="muted">Recorded activity only. No records means zero recorded activity, not proof you did not play.</p>
+        <p v-if="annual.previousLoading.value" role="status">Loading previous year...</p>
+        <p v-else-if="annual.previousError.value" role="alert">
+          {{ annual.previousError.value }}
+          <button class="button ghost" @click="annual.load(true)">Retry previous year</button>
+        </p>
+        <template v-else-if="previousStats">
+          <p>{{ year - 1 }}: {{ previousStats.completed }} dated completions, {{ (previousStats.minutes / 60).toFixed(1) }} logged session hours.</p>
+          <p>Dated completion change: {{ stats.completed - previousStats.completed > 0 ? '+' : '' }}{{ stats.completed - previousStats.completed }} games.</p>
+          <p>Logged session change: {{ stats.minutes - previousStats.minutes > 0 ? '+' : '' }}{{ ((stats.minutes - previousStats.minutes) / 60).toFixed(1) }} hours.</p>
+        </template>
+      </section>
       <section class="account-panel">
         <h2>Monthly activity</h2>
         <div

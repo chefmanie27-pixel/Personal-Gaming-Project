@@ -6,6 +6,7 @@ import { fetchGames, fetchSources } from "../services/api";
 import type { Game, CatalogueSource } from "../types";
 import { releaseYear } from "../utils/dates";
 import axios from "axios";
+import { filterNumberError } from "../utils/filterValidation";
 const route = useRoute();
 const games = ref<Game[]>([]);
 const total = ref(0);
@@ -21,22 +22,33 @@ const sort = ref("featured");
 const genre = ref(
   typeof route.query.genre === "string" ? route.query.genre : "",
 );
-const minScore = ref("");
-const year = ref("");
+const minScore = ref<string | number>("");
+const year = ref<string | number>("");
 const developer = ref("");
 const localSort = ref("");
-const maxPrice = ref(""),
+const maxPrice = ref<string | number>(""),
   availability = ref("");
+// Recreate native number controls on reset: incomplete text can have the same empty model value.
+const filterReset = ref(0);
+const badInput = ref({ price: false, year: false, score: false });
+const priceError = computed(() => filterNumberError(maxPrice.value, "price", badInput.value.price));
+const yearError = computed(() => filterNumberError(year.value, "year", badInput.value.year));
+const scoreError = computed(() => filterNumberError(minScore.value, "score", badInput.value.score));
+const invalidFilters = computed(() => !!(priceError.value || yearError.value || scoreError.value));
+function trackNumber(kind: "price" | "year" | "score", event: Event) {
+  badInput.value[kind] = (event.target as HTMLInputElement).validity.badInput;
+}
 const visibleGames = computed(() => {
+  if (invalidFilters.value) return [];
   const result = games.value.filter(
     (g) =>
-      (!year.value || releaseYear(g.releaseDate) === year.value) &&
+      (year.value === "" || releaseYear(g.releaseDate) === String(year.value)) &&
       (!availability.value || g.status === availability.value) &&
-      (!maxPrice.value ||
+      (maxPrice.value === "" ||
         (g.price !== null && g.price <= Number(maxPrice.value))) &&
       (!developer.value ||
         g.developer.toLowerCase().includes(developer.value.toLowerCase())) &&
-      (!minScore.value ||
+      (minScore.value === "" ||
         (g.score !== null && g.score >= Number(minScore.value))),
   );
   return localSort.value === "title"
@@ -64,10 +76,12 @@ let timer: ReturnType<typeof setTimeout>;
 let observer: IntersectionObserver | undefined;
 const sentinel = ref<HTMLElement>();
 async function load(reset = false) {
-  if (!reset && loading.value) return;
+  if (!reset && (loading.value || invalidFilters.value)) return;
   if (reset) {
     generation++;
     games.value = [];
+    total.value = 0;
+    scope.value = "";
     page.value = 0;
     hasMore.value = true;
   }
@@ -106,12 +120,41 @@ async function load(reset = false) {
 watch(search, () => {
   generation++;
   clearTimeout(timer);
+  games.value = [];
+  total.value = 0;
+  scope.value = "";
+  page.value = 0;
+  hasMore.value = true;
+  error.value = "";
+  // Prevent the observer or Load more from using the old page during debounce.
+  loading.value = true;
   timer = setTimeout(() => load(true), 350);
-});
+}, { flush: "sync" });
 watch(source, () => {
   platform.value = "";
   genre.value = "";
   sort.value = "featured";
+});
+// Capabilities can arrive after the first page or change when the source changes.
+watch(selectedSource, (entry) => {
+  if (!entry) return;
+  if (entry.scores === false && (minScore.value !== "" || badInput.value.score)) {
+    minScore.value = "";
+    badInput.value.score = false;
+    filterReset.value++;
+  }
+  if (entry.prices === false && (maxPrice.value !== "" || badInput.value.price)) {
+    maxPrice.value = "";
+    badInput.value.price = false;
+    filterReset.value++;
+  }
+  if (entry.genres === false) genre.value = "";
+  if (platform.value && !entry.platforms.includes(platform.value)) platform.value = "";
+  if (
+    (sort.value === "score" && entry.scores === false) ||
+    (sort.value === "price" && entry.prices === false) ||
+    (sort.value === "newest" && ["xbox", "xboxpc"].includes(entry.id))
+  ) sort.value = "featured";
 });
 watch([sort, genre, source, platform], () => {
   clearTimeout(timer);
@@ -123,6 +166,10 @@ watch(
     search.value = typeof value === "string" ? value : "";
   },
 );
+watch(
+  () => route.query.genre,
+  (value) => { genre.value = typeof value === "string" ? value : ""; },
+);
 onMounted(() => {
   loadSources();
   load(true);
@@ -132,6 +179,7 @@ onMounted(() => {
         entries.some((e) => e.isIntersecting) &&
         hasMore.value &&
         !error.value &&
+        !invalidFilters.value &&
         !loading.value
       )
         load();
@@ -168,10 +216,11 @@ onBeforeUnmount(() => {
           class="button"
           :class="source === entry.id ? 'primary' : 'ghost'"
           :aria-pressed="source === entry.id"
+          :aria-label="'Browse ' + entry.name + ' games'"
           @click="source = entry.id"
         >
           Browse games</button
-        ><a :href="entry.url" target="_blank" rel="noopener noreferrer"
+        ><a :href="entry.url" :aria-label="'Open official ' + entry.name + ' store'" target="_blank" rel="noopener noreferrer"
           >Open official store</a
         >
       </article>
@@ -191,10 +240,15 @@ onBeforeUnmount(() => {
         <label
           >Maximum price, ZAR (loaded results)<input
             v-model="maxPrice"
+            :disabled="selectedSource?.prices === false"
+            :key="'price-' + filterReset"
+            @input="trackNumber('price', $event)"
+            :aria-invalid="!!priceError"
+            :aria-describedby="priceError ? 'catalogue-price-error' : selectedSource?.prices === false ? 'catalogue-price-unavailable' : undefined"
             type="number"
             min="0"
             max="1000000"
-            step="0.01" /></label
+            step="0.01" /><span v-if="priceError" id="catalogue-price-error" class="filter-validation" role="alert">{{ priceError }}</span><span v-if="selectedSource?.prices === false" id="catalogue-price-unavailable" class="muted">Prices are not supplied by this storefront.</span></label
         ><label
           >Release availability (loaded results)<select v-model="availability">
             <option value="">Any release status</option>
@@ -207,17 +261,26 @@ onBeforeUnmount(() => {
         <label
           >Release year<input
             v-model="year"
+            :key="'year-' + filterReset"
+            @input="trackNumber('year', $event)"
+            :aria-invalid="!!yearError"
+            :aria-describedby="yearError ? 'catalogue-year-error' : undefined"
             type="number"
             min="1970"
             max="2100"
-            placeholder="Any year" /></label
+            placeholder="Any year" /><span v-if="yearError" id="catalogue-year-error" class="filter-validation" role="alert">{{ yearError }}</span></label
         ><label
           >Minimum critic score<input
             v-model="minScore"
+            :disabled="selectedSource?.scores === false"
+            :key="'score-' + filterReset"
+            @input="trackNumber('score', $event)"
+            :aria-invalid="!!scoreError"
+            :aria-describedby="scoreError ? 'catalogue-score-error' : selectedSource?.scores === false ? 'catalogue-score-unavailable' : undefined"
             type="number"
             min="0"
             max="100"
-            placeholder="Any score" /></label
+            placeholder="Any score" /><span v-if="scoreError" id="catalogue-score-error" class="filter-validation" role="alert">{{ scoreError }}</span><span v-if="selectedSource?.scores === false" id="catalogue-score-unavailable" class="muted">Critic scores are not supplied by this storefront.</span></label
         ><label
           >Developer<input
             v-model="developer"
@@ -237,6 +300,7 @@ onBeforeUnmount(() => {
         ><input
           v-model="search"
           aria-label="Search games"
+          maxlength="200"
           placeholder="Search by title..." /></label
       ><select v-model="source" aria-label="Data source">
         <option v-if="!sources.length" value="steam">Steam</option>
@@ -294,6 +358,8 @@ onBeforeUnmount(() => {
         localSort = '';
         maxPrice = '';
         availability = '';
+        badInput = { price: false, year: false, score: false };
+        filterReset++;
       "
     >
       Reset filters
@@ -304,8 +370,10 @@ onBeforeUnmount(() => {
         >RAWG</a
       >. Store links appear on game details.
     </p>
-    <div class="results-label">
-      <span
+    <div class="results-label" role="status" aria-live="polite" aria-atomic="true">
+      <span v-if="invalidFilters">Correct the highlighted filters to view matches.</span>
+      <span v-else-if="loading">Loading games...</span>
+      <span v-else
         >{{ visibleGames.length }} matches in {{ games.length }} loaded
         games<span v-if="Number.isFinite(total) && total > 0">
           / {{ total }} provider results before loaded-result filters</span
@@ -324,19 +392,19 @@ onBeforeUnmount(() => {
     >
       <div v-for="i in 4" :key="i" class="skeleton-card"></div>
     </div>
-    <p v-else-if="!visibleGames.length && !error">
+    <p v-else-if="!visibleGames.length && !error && !invalidFilters">
       No matches on the loaded pages. Load more or change your filters.
     </p>
     <div ref="sentinel" class="load-more">
       <button
         v-if="hasMore"
         class="button ghost"
-        :disabled="loading"
+        :disabled="loading || invalidFilters"
         @click="load()"
       >
         {{ error ? "Retry" : "Load more games" }}
       </button>
-      <p v-else>You've reached the end of these results.</p>
+      <p v-else-if="!invalidFilters">You've reached the end of these results.</p>
     </div>
   </div>
 </template>

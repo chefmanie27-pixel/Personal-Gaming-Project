@@ -31,6 +31,8 @@ export const useLibraryStore = defineStore("library", () => {
   const entries = ref<LibraryEntry[]>([]);
   const message = ref("");
   const storageError = ref("");
+  const deviceUnreadable = ref(false);
+  const deviceReadOnly = computed(() => syncState.value === "local" && deviceUnreadable.value);
   const accountId = ref<string | null>(null);
   const syncState = ref<"local" | "loading" | "ready" | "error">("local");
   const syncError = ref("");
@@ -51,30 +53,32 @@ export const useLibraryStore = defineStore("library", () => {
   function readDevice(): LibraryEntry[] {
     try {
       const saved: unknown = JSON.parse(localStorage.getItem(key) ?? "[]");
-      if (Array.isArray(saved))
-        return saved.filter(
-          (e): e is LibraryEntry =>
-            !!e &&
-            typeof e.game?.slug === "string" &&
-            typeof e.game.title === "string" &&
-            Array.isArray(e.game.genres) &&
-            Array.isArray(e.game.platforms) &&
-            typeof e.game.store === "string" &&
-            statuses.includes(e.status) &&
-            typeof e.favorite === "boolean" &&
-            (e.rating === null ||
-              (Number.isFinite(e.rating) && e.rating >= 0 && e.rating <= 10)) &&
-            Number.isFinite(e.hours) &&
-            e.hours >= 0 &&
-            typeof e.notes === "string" &&
-            typeof e.addedAt === "string",
-        );
+      if (!Array.isArray(saved) || !saved.every((e): e is LibraryEntry =>
+        !!e && typeof e.game?.slug === "string" && e.game.slug.length > 0 &&
+        typeof e.game.title === "string" &&
+        Array.isArray(e.game.genres) && e.game.genres.every((g: unknown) => typeof g === "string") &&
+        Array.isArray(e.game.platforms) && e.game.platforms.every((g: unknown) => typeof g === "string") &&
+        typeof e.game.store === "string" && statuses.includes(e.status) && typeof e.favorite === "boolean" &&
+        (e.rating === null || (Number.isFinite(e.rating) && e.rating >= 0 && e.rating <= 10)) &&
+        Number.isFinite(e.hours) && e.hours >= 0 && typeof e.notes === "string" && typeof e.addedAt === "string"
+      )) throw new Error("Invalid saved library");
+      if (deviceUnreadable.value) storageError.value = "";
+      deviceUnreadable.value = false;
+      return saved;
     } catch {
-      storageError.value =
-        "Your saved collection could not be read. Existing storage has not been overwritten.";
+      deviceUnreadable.value = true;
+      storageError.value = "Your device collection could not be read completely. Its original data is preserved; device edits and import are blocked until it can be read.";
       return [];
     }
-    return [];
+  }
+  function deviceBackup(): string | null {
+    try { return localStorage.getItem(key); }
+    catch { storageError.value = "Device storage could not be accessed. No data was changed."; return null; }
+  }
+  function reloadDevice() {
+    const saved = readDevice();
+    deviceCount.value = saved.length;
+    if (!accountToken) entries.value = saved;
   }
   entries.value = readDevice();
   async function connect(token: string | null, userId: string | null) {
@@ -161,17 +165,22 @@ export const useLibraryStore = defineStore("library", () => {
     };
   }
   function importDevice() {
+    if (!accountToken || syncState.value !== "ready" || pending.value) return;
+    const device = readDevice();
+    deviceCount.value = device.length;
+    if (deviceUnreadable.value) return;
     return enqueue(async (token, current) => {
-      const device = readDevice();
       for (let i = 0; i < device.length; i += 25) {
         if (!current()) return;
         await importLibraryEntries(token, device.slice(i, i + 25));
       }
+      if (!current()) return;
       const saved = await loadLibrary(token);
       if (current()) entries.value = saved;
     });
   }
   function persist(text: string) {
+    if (!accountToken && deviceUnreadable.value) return;
     try {
       localStorage.setItem(key, JSON.stringify(entries.value));
       storageError.value = "";
@@ -184,6 +193,7 @@ export const useLibraryStore = defineStore("library", () => {
   const find = (slug: string) =>
     entries.value.find((e) => e.game.slug === slug);
   function add(game: Game) {
+    if (!accountToken && deviceUnreadable.value) return;
     if (accountToken)
       return enqueue(async (token, current) => {
         const saved = await addLibraryEntry(token, fresh(game));
@@ -208,6 +218,7 @@ export const useLibraryStore = defineStore("library", () => {
       Pick<LibraryEntry, "status" | "favorite" | "rating" | "hours" | "notes">
     >,
   ) {
+    if (!accountToken && deviceUnreadable.value) return;
     const entry = find(slug);
     if (!entry) return;
     if (patch.status !== undefined && !statuses.includes(patch.status)) return;
@@ -231,6 +242,7 @@ export const useLibraryStore = defineStore("library", () => {
     persist("Library updated.");
   }
   function favorite(game: Game) {
+    if (!accountToken && deviceUnreadable.value) return;
     if (accountToken)
       return enqueue(async (token, current) => {
         const entry = find(game.slug);
@@ -246,6 +258,7 @@ export const useLibraryStore = defineStore("library", () => {
     update(game.slug, { favorite: !entry.favorite });
   }
   function bulkStatus(slugs: string[], status: PlayingStatus) {
+    if (!accountToken && deviceUnreadable.value) return;
     const selected = new Set(slugs);
     if (
       !selected.size ||
@@ -266,6 +279,7 @@ export const useLibraryStore = defineStore("library", () => {
     persist("Updated selected game statuses.");
   }
   function remove(slug: string) {
+    if (!accountToken && deviceUnreadable.value) return;
     if (accountToken)
       return enqueue(async (token, current) => {
         await deleteLibraryEntry(token, slug);
@@ -309,6 +323,10 @@ export const useLibraryStore = defineStore("library", () => {
     entries,
     message,
     storageError,
+    deviceUnreadable,
+    deviceReadOnly,
+    deviceBackup,
+    reloadDevice,
     find,
     add,
     update,

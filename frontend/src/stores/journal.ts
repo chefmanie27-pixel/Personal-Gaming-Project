@@ -135,6 +135,10 @@ export const useJournalStore = defineStore("journal", () => {
     const revision = ++mutationGeneration,
       key = workspace.sessionKey,
       token = auth.token;
+    const current = () =>
+      revision === mutationGeneration &&
+      key === workspace.sessionKey &&
+      token === auth.token;
     busy.value = true;
     error.value = "";
     try {
@@ -164,19 +168,23 @@ export const useJournalStore = defineStore("journal", () => {
       )
         return false;
       await load(true);
-      return true;
+      return current();
     } catch (reason) {
-      if (revision === mutationGeneration) error.value = message(reason);
+      if (current()) error.value = message(reason);
       return false;
     } finally {
-      if (revision === mutationGeneration) busy.value = false;
+      if (current()) busy.value = false;
     }
   }
   async function remove(entry: JournalItem) {
-    if (!ready.value || busy.value) return;
+    if (!ready.value || busy.value) return false;
     const revision = ++mutationGeneration,
       key = workspace.sessionKey,
       token = auth.token;
+    const current = () =>
+      revision === mutationGeneration &&
+      key === workspace.sessionKey &&
+      token === auth.token;
     busy.value = true;
     error.value = "";
     try {
@@ -193,16 +201,14 @@ export const useJournalStore = defineStore("journal", () => {
         }))
       )
         throw new Error("Device write failed");
-      if (
-        revision === mutationGeneration &&
-        key === workspace.sessionKey &&
-        token === auth.token
-      )
-        await load(true);
+      if (!current()) return false;
+      await load(true);
+      return current();
     } catch (reason) {
-      if (revision === mutationGeneration) error.value = message(reason);
+      if (current()) error.value = message(reason);
+      return false;
     } finally {
-      if (revision === mutationGeneration) busy.value = false;
+      if (current()) busy.value = false;
     }
   }
   async function loadSummary(year: number) {

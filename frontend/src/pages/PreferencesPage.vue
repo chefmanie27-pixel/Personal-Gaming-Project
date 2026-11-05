@@ -3,11 +3,19 @@ import { ref, watch } from "vue";
 import { useWorkspaceStore } from "../stores/workspace";
 const workspace = useWorkspaceStore();
 const dirty = ref(false);
+let editRevision = 0;
+function edited() {
+  editRevision++;
+  dirty.value = true;
+  formError.value = "";
+}
 const formError = ref("");
 watch(
   () => workspace.sessionKey,
   () => {
+    editRevision++;
     dirty.value = false;
+    formError.value = "";
   },
 );
 const name = ref(""),
@@ -46,15 +54,25 @@ async function save() {
     return;
   }
   formError.value = "";
+  const submitted = {
+    profile: { name: name.value.trim(), bio: bio.value.trim() },
+    revision: editRevision,
+    session: workspace.sessionKey,
+  };
   const saved = await workspace.change((d) => {
-    d.profile = { name: name.value.trim(), bio: bio.value.trim() };
+    d.profile = submitted.profile;
     d.preferences = {
       ...d.preferences,
       genres: chosenGenres,
       platforms: chosenPlatforms,
     };
   });
-  if (saved) dirty.value = false;
+  if (
+    saved &&
+    submitted.revision === editRevision &&
+    submitted.session === workspace.sessionKey
+  )
+    dirty.value = false;
 }
 </script>
 <template>
@@ -78,7 +96,7 @@ async function save() {
     <form
       class="workspace-form account-panel"
       @submit.prevent="save"
-      @input="dirty = true"
+      @input="edited"
     >
       <label>Display name<input v-model="name" maxlength="80" /></label
       ><label>About you<textarea v-model="bio" maxlength="1000" /></label
@@ -105,7 +123,12 @@ async function save() {
         Save profile and preferences
       </button>
     </form>
-    <p v-if="workspace.notice" role="status">{{ workspace.notice }}</p>
+    <p v-if="dirty" role="status" class="unsaved-preferences">
+      You have unsaved preference changes.
+    </p>
+    <p v-if="workspace.notice && !dirty" role="status">
+      {{ workspace.notice }}
+    </p>
     <section v-if="workspace.account" class="account-panel">
       <h2>Import device workspace</h2>
       <p class="muted">
@@ -115,7 +138,7 @@ async function save() {
       </p>
       <button
         class="button ghost"
-        :disabled="workspace.busy || workspace.importing || !workspace.ready"
+        :disabled="workspace.busy || workspace.importing || !workspace.ready || !!workspace.error"
         @click="workspace.importDevice"
       >
         Import device workspace

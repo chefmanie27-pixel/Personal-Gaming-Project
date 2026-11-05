@@ -140,7 +140,7 @@ function scrollRow(event: MouseEvent, direction: number) {
             >View Game &nearr;</RouterLink
           ><button
             class="button ghost"
-            :disabled="!!library.find(featured.slug)"
+            :disabled="library.deviceReadOnly || !!library.find(featured.slug)"
             @click="library.add(featured)"
           >
             {{

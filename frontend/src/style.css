@@ -8,6 +8,8 @@
   --line: rgba(255, 255, 255, 0.09);
   --purple: #8b5cf6;
   --blue: #38bdf8;
+  --action-bg: color-mix(in srgb, var(--purple), #000 12%);
+  --action-hover-bg: color-mix(in srgb, var(--purple), #000 22%);
 }
 * {
   box-sizing: border-box;
@@ -1032,7 +1034,7 @@ button {
   font-size: 13px;
 }
 .button.primary {
-  background: var(--purple);
+  background: var(--action-bg);
   box-shadow: 0 6px 24px #8b5cf61a;
 }
 .button:hover:not(:disabled) {
@@ -1040,7 +1042,7 @@ button {
   background-color: #8b5cf626;
 }
 .button.primary:hover:not(:disabled) {
-  background: #7c3aed;
+  background: var(--action-hover-bg);
 }
 .site-header {
   height: auto;
@@ -2518,3 +2520,15 @@ button:disabled {
   cursor: pointer;
   padding: 12px 0;
 }
+
+.social-editor-fields {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.filter-validation { display: block; margin-top: 6px; font-size: 0.875rem; line-height: 1.5; }
+input[aria-invalid="true"] { border-color: #fb7185; outline: 1px solid #fb7185; }

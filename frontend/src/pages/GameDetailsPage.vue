@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import axios from "axios";
 import GameDiscussions from "../components/GameDiscussions.vue";
 import CommunityReviews from "../components/CommunityReviews.vue";
 import GameMedia from "../components/GameMedia.vue";
@@ -7,14 +6,12 @@ import LibraryControls from "../components/LibraryControls.vue";
 import RelatedContent from "../components/RelatedContent.vue";
 import SystemRequirements from "../components/SystemRequirements.vue";
 import GameCover from "../components/GameCover.vue";
-import { ref, watch, onBeforeUnmount } from "vue";
+import { ref, watch, onBeforeUnmount, nextTick } from "vue";
 import { useRoute } from "vue-router";
-import { socialClient, socialMessage } from "../stores/social";
 import { fetchGame } from "../services/api";
 import type { Game } from "../types";
-import { useAuthStore } from "../stores/auth";
 import PriceHistoryChart from "../components/PriceHistoryChart.vue";
-import { createAlert } from "../services/alerts";
+import { useGameActions } from "../composables/useGameActions";
 
 const attribution = (slug: string) =>
   slug.startsWith("rawg-")
@@ -32,7 +29,6 @@ const attribution = (slug: string) =>
               : "Steam";
 const storeName = (url: string) => new URL(url).hostname;
 const route = useRoute();
-const auth = useAuthStore();
 const game = ref<Game>();
 const loading = ref(true);
 const error = ref("");
@@ -62,107 +58,12 @@ onBeforeUnmount(() => {
 });
 const formatPrice = (value: number | null) =>
   value === null ? "Price unavailable" : `R${value.toFixed(2)}`;
-const wishlistMessage = ref("");
-const targetPrice = ref<number>();
-const savingAlert = ref(false);
-const alertMessage = ref(""),
-  observationMessage = ref(""),
-  observing = ref(false),
-  historyRevision = ref(0);
-async function saveObservation() {
-  if (!auth.token || !game.value) {
-    observationMessage.value = "Sign in to save a source-backed observation.";
-    return;
-  }
-  observing.value = true;
-  const token = auth.token;
-  try {
-    const r = await socialClient.post(
-      "/games/" + game.value.slug + "/observe",
-      {},
-      { headers: { Authorization: "Bearer " + token } },
-    );
-    if (auth.token !== token) return;
-    observationMessage.value = r.data.data.priceAvailable
-      ? r.data.data.recorded
-        ? "Regional store observation saved."
-        : "This cached observation is already stored."
-      : "Game metadata saved, but its current price is missing or stale; no price observation was created.";
-    historyRevision.value++;
-  } catch (e) {
-    if (auth.token === token) observationMessage.value = socialMessage(e);
-  } finally {
-    observing.value = false;
-  }
-}
-
-async function ensureCanonical(token: string) {
-  if (!game.value || /^(rawg|playstation)-/.test(game.value.slug)) return;
-  try {
-    await socialClient.post(
-      "/games/" + game.value.slug + "/observe",
-      {},
-      { headers: { Authorization: "Bearer " + token } },
-    );
-  } catch (e) {
-    if (axios.isAxiosError(e) && e.response?.status === 409) throw e;
-  }
-}
-async function saveToWishlist() {
-  wishlistMessage.value = "";
-  const token = auth.token;
-  if (!token) {
-    wishlistMessage.value = "Sign in to save games.";
-    return;
-  }
-  try {
-    error.value = "";
-    await ensureCanonical(token);
-    if (auth.token !== token) return;
-    await auth.addWishlist(game.value!.slug);
-    wishlistMessage.value = "Saved to your wishlist.";
-  } catch {
-    wishlistMessage.value = auth.token
-      ? "Could not save this game yet."
-      : "Sign in to save games.";
-  }
-}
-async function setPriceAlert() {
+const { targetError, targetControlRevision, trackTarget, wishlistMessage, wishlistBusy, targetPrice, savingAlert, alertMessage, observationMessage, observing, historyRevision, saveObservation, saveToWishlist, setPriceAlert } = useGameActions(game, () => String(route.params.slug));
+const targetControl = ref<HTMLInputElement>();
+function submitPriceAlert() {
   if (savingAlert.value) return;
-  alertMessage.value = "";
-  const token = auth.token,
-    slug = game.value?.slug,
-    target = targetPrice.value;
-  if (
-    !token ||
-    !slug ||
-    typeof target !== "number" ||
-    !Number.isFinite(target) ||
-    target <= 0 ||
-    target > 9999999999.99 ||
-    !/^\d+(?:\.\d{1,2})?$/.test(String(target))
-  ) {
-    alertMessage.value =
-      "Sign in and enter a positive target with at most two decimal places.";
-    return;
-  }
-  savingAlert.value = true;
-  const current = () => auth.token === token && game.value?.slug === slug;
-  try {
-    await ensureCanonical(token);
-    if (!current()) return;
-    const result = await createAlert(token, slug, target);
-    if (!current()) return;
-    alertMessage.value = result.existing
-      ? result.active
-        ? "This price alert is already saved."
-        : "This alert already exists and is paused. Resume it in your account."
-      : "Price alert saved.";
-  } catch (e) {
-    if (current()) alertMessage.value = socialMessage(e);
-  } finally {
-    savingAlert.value = false;
-  }
+  void setPriceAlert();
+  void nextTick(() => { if (targetError.value) targetControl.value?.focus(); });
 }
 </script>
 
@@ -170,7 +71,7 @@ async function setPriceAlert() {
   <p v-if="error" role="alert" class="empty-state">
     {{ error }} <button class="button ghost" @click="loadGame">Retry</button>
   </p>
-  <div v-if="loading" class="detail-loading">Loading game...</div>
+  <div v-if="loading" class="detail-loading" role="status">Loading game...</div>
   <template v-else-if="game">
     <section
       class="detail-hero"
@@ -321,10 +222,10 @@ async function setPriceAlert() {
           rel="noopener noreferrer"
           class="button ghost full"
           >{{ storeName(url) }}</a
-        ><button class="button ghost full" @click="saveToWishlist">
-          ＋ Add to wishlist
+        ><button class="button ghost full" :disabled="wishlistBusy" @click="saveToWishlist">
+          {{ wishlistBusy ? "Saving wishlist..." : "+ Add to wishlist" }}
         </button>
-        <p v-if="wishlistMessage" class="wishlist-message">
+        <p v-if="wishlistMessage" class="wishlist-message" role="status">
           {{ wishlistMessage }}
         </p>
         <div class="alert-form">
@@ -332,6 +233,12 @@ async function setPriceAlert() {
             >Alert me below
             <input
               v-model.number="targetPrice"
+              ref="targetControl"
+              :key="targetControlRevision"
+              @input="trackTarget"
+              :aria-invalid="!!targetError"
+              aria-describedby="price-alert-hint price-alert-error"
+              :disabled="savingAlert"
               type="number"
               min="0.01"
               step="0.01"
@@ -340,11 +247,13 @@ async function setPriceAlert() {
           ><button
             class="button ghost full"
             :disabled="savingAlert"
-            @click="setPriceAlert"
+            @click="submitPriceAlert"
           >
             {{ savingAlert ? "Saving alert..." : "Set price alert" }}
           </button>
-          <p v-if="alertMessage" class="wishlist-message">{{ alertMessage }}</p>
+          <p id="price-alert-hint" class="muted">Target price in ZAR. Use a positive amount with up to two decimal places.</p>
+          <p id="price-alert-error" class="filter-validation" role="alert">{{ targetError }}</p>
+          <p v-if="alertMessage" class="wishlist-message" role="status">{{ alertMessage }}</p>
         </div>
         <hr />
         <p class="fact">

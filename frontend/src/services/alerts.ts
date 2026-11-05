@@ -1,8 +1,8 @@
 import axios from "axios";
 
-const client = axios.create({
+export const alertsClient = axios.create({
   timeout: 20000,
-  baseURL: import.meta.env.VITE_API_URL ?? "http://localhost:3000/api",
+  baseURL: import.meta.env?.VITE_API_URL ?? "http://localhost:3000/api",
 });
 export interface PriceAlert {
   id: string;
@@ -24,7 +24,7 @@ export interface PriceAlert {
 }
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 export async function fetchAlerts(token: string) {
-  const { data } = await client.get<{ data: PriceAlert[] }>("/alerts", {
+  const { data } = await alertsClient.get<{ data: PriceAlert[] }>("/alerts", {
     headers: auth(token),
   });
   return data.data;
@@ -34,16 +34,19 @@ export async function createAlert(
   gameSlug: string,
   target: number,
 ) {
-  const { data } = await client.post<{ data: PriceAlert; existing?: boolean }>(
-    "/alerts",
-    { gameSlug, target },
-    { headers: auth(token) },
-  );
+  const { data } = await alertsClient.post<{
+    data: PriceAlert;
+    existing?: boolean;
+  }>("/alerts", { gameSlug, target }, { headers: auth(token) });
   return { ...data.data, existing: data.existing === true };
 }
 export async function updateAlert(token: string, id: string, active: boolean) {
-  await client.patch(`/alerts/${id}`, { active }, { headers: auth(token) });
+  await alertsClient.patch(
+    `/alerts/${id}`,
+    { active },
+    { headers: auth(token) },
+  );
 }
 export async function deleteAlert(token: string, id: string) {
-  await client.delete(`/alerts/${id}`, { headers: auth(token) });
+  await alertsClient.delete(`/alerts/${id}`, { headers: auth(token) });
 }

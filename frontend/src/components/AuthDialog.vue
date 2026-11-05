@@ -32,6 +32,7 @@ onMounted(() => {
   document.addEventListener("keydown", handleKey);
 });
 onBeforeUnmount(() => {
+  if (busy.value) auth.cancelPending();
   document.removeEventListener("keydown", handleKey);
   previousFocus?.focus();
 });
@@ -43,6 +44,7 @@ const email = ref("");
 const password = ref("");
 const busy = ref(false);
 const submit = async () => {
+  if (busy.value) return;
   busy.value = true;
   try {
     mode.value === "login"
@@ -86,18 +88,24 @@ const submit = async () => {
         <label
           >Email<input
             v-model="email"
+            :disabled="busy"
             type="email"
             required
             autocomplete="email" /></label
         ><label
           >Password<input
             v-model="password"
+            :disabled="busy"
             type="password"
             required
             minlength="8"
-            autocomplete="current-password"
+            :autocomplete="
+              mode === 'register' ? 'new-password' : 'current-password'
+            "
         /></label>
-        <p v-if="auth.error" class="form-error">{{ auth.error }}</p>
+        <p v-if="auth.error" class="form-error" role="alert">
+          {{ auth.error }}
+        </p>
         <button class="button primary full" :disabled="busy">
           {{
             busy
@@ -110,6 +118,7 @@ const submit = async () => {
       </form>
       <button
         class="switch-auth"
+        :disabled="busy"
         @click="mode = mode === 'login' ? 'register' : 'login'"
       >
         {{

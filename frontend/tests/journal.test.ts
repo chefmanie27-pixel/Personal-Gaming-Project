@@ -207,3 +207,71 @@ test("explicit normalized journal import keeps the guest backup and sends no jou
   assert.equal(rows.get(item(1).id)?.notes, "Account wins");
   assert.equal(storage.get("gamevault_workspace_v1"), backup);
 });
+
+test("journal save cannot report success after session changes during its refresh", async () => {
+  const { auth, workspace, journal } = await account();
+  let release!: () => void;
+  let refreshStarted!: () => void;
+  const started = new Promise<void>((r) => (refreshStarted = r));
+  journalClient.defaults.adapter = async (config) => {
+    if (config.method === "post")
+      return {
+        data: { data: item(80) },
+        status: 201,
+        statusText: "Created",
+        headers: {},
+        config,
+      };
+    refreshStarted();
+    await new Promise<void>((r) => (release = r));
+    return {
+      data: { data: [item(80)], meta: { hasMore: false, nextCursor: null } },
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      config,
+    };
+  };
+  const pending = journal.save(item(80));
+  await started;
+  auth.logout();
+  await workspace.connect(null, null);
+  await nextTick();
+  release();
+  assert.equal(await pending, false);
+  assert.deepEqual(journal.entries, []);
+});
+
+test("journal delete only acknowledges its own session after refresh", async () => {
+  const { auth, workspace, journal } = await account();
+  let release!: () => void;
+  let start!: () => void;
+  const begun = new Promise<void>((r) => (start = r));
+  journalClient.defaults.adapter = async (config) => {
+    if (config.method === "delete")
+      return {
+        data: null,
+        status: 204,
+        statusText: "No Content",
+        headers: {},
+        config,
+      };
+    start();
+    await new Promise<void>((r) => (release = r));
+    return {
+      data: { data: [], meta: { hasMore: false, nextCursor: null } },
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      config,
+    };
+  };
+  const pending = journal.remove(item(81));
+  await begun;
+  auth.logout();
+  await workspace.connect(null, null);
+  await nextTick();
+  release();
+  assert.equal(await pending, false);
+  assert.deepEqual(journal.entries, []);
+});

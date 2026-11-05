@@ -235,72 +235,75 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     });
   }
   async function importDevice() {
-    if (importing.value) return false;
+    if (importing.value || busy.value || !ready.value || error.value || !token) return false;
     const saved = device();
-    if (journalMode.value === "normalized" && token) {
-      const current = generation,
-        auth = token;
-      importing.value = true;
-      try {
-        for (let start = 0; start < saved.journal.length; start += 25) {
+    if (error.value) return false;
+    const current = generation, auth = token;
+    importing.value = true;
+    try {
+      if (journalMode.value === "normalized" && token) {
+        try {
+          for (let start = 0; start < saved.journal.length; start += 25) {
+            if (current !== generation) return false;
+            await workspaceClient.post(
+              "/journal/import",
+              {
+                entries: saved.journal
+                  .slice(start, start + 25)
+                  .map(({ version, ...entry }) => entry),
+              },
+              { headers: { Authorization: "Bearer " + auth } },
+            );
+          }
           if (current !== generation) return false;
-          await workspaceClient.post(
-            "/journal/import",
-            {
-              entries: saved.journal
-                .slice(start, start + 25)
-                .map(({ version, ...entry }) => entry),
-            },
-            { headers: { Authorization: "Bearer " + auth } },
-          );
+        } catch {
+          if (current === generation)
+            error.value =
+              "Journal import could not finish. Your device backup is kept; reload before retrying.";
+          return false;
         }
-        if (current !== generation) return false;
-      } catch {
-        if (current === generation)
-          error.value =
-            "Journal import could not finish. Your device backup is kept; reload before retrying.";
-        return false;
-      } finally {
-        if (current === generation) importing.value = false;
       }
-    }
-    return change((d) => {
-      d.collections = [
-        ...new Map(
-          [...saved.collections, ...d.collections].map((c) => [c.id, c]),
-        ).values(),
-      ];
-      d.metadata = { ...saved.metadata, ...d.metadata };
-      if (saved.goals?.length)
-        d.goals = [
+      if (current !== generation) return false;
+      return await change((d) => {
+        d.collections = [
           ...new Map(
-            [...(saved.goals ?? []), ...(d.goals ?? [])].map((g) => [g.id, g]),
+            [...saved.collections, ...d.collections].map((c) => [c.id, c]),
           ).values(),
-        ].slice(0, 50);
-      const feedback = {
-        ...saved.preferences.recommendationFeedback,
-        ...d.preferences.recommendationFeedback,
-      };
-      if (Object.keys(feedback).length)
-        d.preferences.recommendationFeedback = Object.fromEntries(
-          Object.entries(feedback)
-            .sort((a, b) => b[1].at.localeCompare(a[1].at))
-            .slice(0, 500),
-        );
-      d.journal =
-        journalMode.value === "normalized"
-          ? []
-          : [
-              ...new Map(
-                [...saved.journal, ...d.journal].map((e) => [e.id, e]),
-              ).values(),
-            ];
-      d.watches = [
-        ...new Map(
-          [...saved.watches, ...d.watches].map((w) => [w.game.slug, w]),
-        ).values(),
-      ];
-    });
+        ];
+        d.metadata = { ...saved.metadata, ...d.metadata };
+        if (saved.goals?.length)
+          d.goals = [
+            ...new Map(
+              [...(saved.goals ?? []), ...(d.goals ?? [])].map((g) => [g.id, g]),
+            ).values(),
+          ].slice(0, 50);
+        const feedback = {
+          ...saved.preferences.recommendationFeedback,
+          ...d.preferences.recommendationFeedback,
+        };
+        if (Object.keys(feedback).length)
+          d.preferences.recommendationFeedback = Object.fromEntries(
+            Object.entries(feedback)
+              .sort((a, b) => b[1].at.localeCompare(a[1].at))
+              .slice(0, 500),
+          );
+        d.journal =
+          journalMode.value === "normalized"
+            ? []
+            : [
+                ...new Map(
+                  [...saved.journal, ...d.journal].map((e) => [e.id, e]),
+                ).values(),
+              ];
+        d.watches = [
+          ...new Map(
+            [...saved.watches, ...d.watches].map((w) => [w.game.slug, w]),
+          ).values(),
+        ];
+      });
+    } finally {
+      if (current === generation) importing.value = false;
+    }
   }
   return {
     data,

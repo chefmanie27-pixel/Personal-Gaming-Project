@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { createRequestScope } from "../utils/requestScope";
-const scope = createRequestScope();
-import { ref, watch } from "vue";
+import { createOperationScope } from "../utils/requestScope";
+import { isAxiosError } from "axios";
+import { ref, watch, onBeforeUnmount } from "vue";
 import { useAuthStore } from "../stores/auth";
 import {
   useSocialStore,
@@ -13,9 +13,17 @@ import {
 const props = defineProps<{ game?: PublicGame; username?: string }>();
 const auth = useAuthStore(),
   social = useSocialStore();
+const scope = createOperationScope(() => [
+  auth.token,
+  auth.user?.id,
+  props.game?.slug,
+  props.username,
+]);
+onBeforeUnmount(() => scope.dispose());
 const rows = ref<CommunityReview[]>([]),
   offset = ref<number | null>(0),
   busy = ref(false),
+  loading = ref(false),
   error = ref(""),
   q = ref(""),
   sort = ref("newest"),
@@ -25,8 +33,10 @@ const rows = ref<CommunityReview[]>([]),
   rating = ref(8),
   spoiler = ref(false),
   notice = ref("");
-async function load(more = false) {
+async function load(more = false, forced = false) {
+  if (busy.value && !forced) return;
   const current = scope.next();
+  loading.value = true;
   busy.value = true;
   error.value = "";
   try {
@@ -51,10 +61,16 @@ async function load(more = false) {
   } catch (e) {
     if (current()) error.value = socialMessage(e);
   } finally {
-    if (current()) busy.value = false;
+    if (current()) {
+      busy.value = false;
+      loading.value = false;
+    }
   }
 }
 function edit(r: CommunityReview) {
+  if (busy.value) return;
+  error.value = "";
+  notice.value = "";
   editing.value = JSON.parse(JSON.stringify(r));
   title.value = r.title;
   body.value = r.body;
@@ -70,9 +86,12 @@ function clear() {
 }
 async function save() {
   const game = editing.value?.game ?? props.game;
-  if (!game) return;
+  if (busy.value || !game || !social.me) return;
+  const current = scope.next();
   busy.value = true;
+  loading.value = false;
   error.value = "";
+  notice.value = "";
   try {
     const r = await social.request(
       "/social/reviews" + (editing.value ? "/" + editing.value.id : ""),
@@ -86,15 +105,25 @@ async function save() {
         version: editing.value?.version ?? 0,
       },
     );
-    notice.value = r.existing
-      ? "You already published a review of this game. Use Edit to change it."
-      : "Review published. Profile privacy controls who can read it.";
-    clear();
-    await load();
+    if (!current()) return;
+    if (r.existing) {
+      editing.value = JSON.parse(JSON.stringify(r.data));
+      notice.value =
+        "You already published a review of this game. Your draft is kept; save changes to update that review.";
+    } else {
+      clear();
+      notice.value =
+        "Review published. Profile privacy controls who can read it.";
+    }
+    await load(false, true);
   } catch (e) {
-    error.value = socialMessage(e);
+    if (current())
+      error.value =
+        isAxiosError(e) && e.response?.status === 409
+          ? "This review changed or is unavailable. Your draft is kept. Reload reviews and choose Edit review again to load the saved version."
+          : socialMessage(e);
   } finally {
-    busy.value = false;
+    if (current()) busy.value = false;
   }
 }
 async function action(
@@ -102,10 +131,14 @@ async function action(
   kind: "like" | "delete" | "report",
   reason?: string,
 ) {
+  if (busy.value) return;
   if (kind === "delete" && !window.confirm("Delete this published review?"))
     return;
+  const current = scope.next();
   busy.value = true;
+  loading.value = false;
   error.value = "";
+  notice.value = "";
   try {
     if (kind === "delete")
       await social.request(
@@ -118,26 +151,40 @@ async function action(
         r.liked ? "DELETE" : "POST",
         {},
       );
-    else {
+    else
       await social.request("/social/reviews/" + r.id + "/report", "POST", {
         reason,
         category: reportCategory.value,
       });
+    if (!current()) return;
+    if (kind === "report") {
+      reportId.value = "";
+      reportReason.value = "";
       notice.value = "Report submitted for administrator review.";
     }
-    await load();
+    if (kind === "delete" && editing.value?.id === r.id) clear();
+    await load(false, true);
   } catch (e) {
-    error.value = socialMessage(e);
+    if (current()) error.value = socialMessage(e);
   } finally {
-    busy.value = false;
+    if (current()) busy.value = false;
   }
 }
 const reportCategory = ref("other");
 const reportId = ref(""),
   reportReason = ref("");
 watch(
-  () => [props.game?.slug, props.username, auth.user?.id],
+  () => [props.game?.slug, props.username, auth.user?.id, auth.token],
   () => {
+    scope.invalidate();
+    busy.value = false;
+    loading.value = false;
+    error.value = "";
+    notice.value = "";
+    reportId.value = "";
+    reportReason.value = "";
+    reportCategory.value = "other";
+    offset.value = 0;
     rows.value = [];
     clear();
     void load();
@@ -170,45 +217,57 @@ watch(
         </select></label
       ><button class="button ghost" :disabled="busy">Search</button>
     </form>
-    <p v-if="error" class="form-error" role="alert">{{ error }}</p>
+    <p v-if="error" class="form-error" role="alert">
+      {{ error }}
+      <button class="button ghost" :disabled="busy" @click="load()">
+        Reload reviews
+      </button>
+    </p>
     <p v-if="notice" role="status">{{ notice }}</p>
     <form
       v-if="social.me && (game || editing)"
       class="account-panel social-form"
       @submit.prevent="save"
     >
-      <h3>{{ editing ? "Edit your review" : "Publish your review" }}</h3>
-      <label>Title<input v-model="title" required maxlength="120" /></label
-      ><label
-        >Review<textarea
-          v-model="body"
-          required
-          maxlength="10000"
-          rows="5"
-        /></label
-      ><label
-        >Rating out of ten<input
-          v-model.number="rating"
-          type="number"
-          min="0"
-          max="10"
-          step="0.5"
-          required /></label
-      ><label class="check-label"
-        ><input v-model="spoiler" type="checkbox" /> Contains spoilers</label
+      <fieldset
+        class="social-editor-fields"
+        aria-label="Review editor"
+        :disabled="busy"
       >
-      <div class="hero-actions">
-        <button class="button primary" :disabled="busy">
-          {{ editing ? "Save changes" : "Publish review" }}</button
-        ><button
-          v-if="editing"
-          class="button ghost"
-          type="button"
-          @click="clear"
+        <h3>{{ editing ? "Edit your review" : "Publish your review" }}</h3>
+        <label>Title<input v-model="title" required maxlength="120" /></label
+        ><label
+          >Review<textarea
+            v-model="body"
+            required
+            maxlength="10000"
+            rows="5"
+          /></label
+        ><label
+          >Rating out of ten<input
+            v-model.number="rating"
+            type="number"
+            min="0"
+            max="10"
+            step="0.5"
+            required /></label
+        ><label class="check-label"
+          ><input v-model="spoiler" type="checkbox" /> Contains spoilers</label
         >
-          Cancel edit
-        </button>
-      </div>
+        <div class="hero-actions">
+          <button class="button primary" :disabled="busy">
+            {{ editing ? "Save changes" : "Publish review" }}</button
+          ><button
+            v-if="editing"
+            class="button ghost"
+            type="button"
+            :disabled="busy"
+            @click="clear"
+          >
+            Cancel edit
+          </button>
+        </div>
+      </fieldset>
     </form>
     <p v-else-if="game" class="muted">
       <RouterLink to="/social/studio">Create your social profile</RouterLink> to
@@ -258,6 +317,7 @@ watch(
         ><button
           v-if="auth.user"
           class="button ghost"
+          :disabled="busy"
           @click="reportId = reportId === r.id ? '' : r.id"
         >
           Report review
@@ -266,31 +326,35 @@ watch(
       <form
         v-if="reportId === r.id"
         class="social-form"
-        @submit.prevent="
-          action(r, 'report', reportReason);
-          reportId = '';
-          reportReason = '';
-        "
+        @submit.prevent="action(r, 'report', reportReason)"
       >
-        <label
-          >Category<select v-model="reportCategory">
-            <option value="spam">Spam</option>
-            <option value="harassment">Harassment</option>
-            <option value="spoilers">Unmarked spoilers</option>
-            <option value="other">Other</option>
-          </select></label
-        ><label
-          >Reason for reporting<textarea
-            v-model="reportReason"
-            minlength="3"
-            maxlength="1000"
-            required
-          /></label
-        ><button class="button ghost" :disabled="busy">Submit report</button>
+        <fieldset
+          class="social-editor-fields"
+          aria-label="Review report"
+          :disabled="busy"
+        >
+          <label
+            >Category<select v-model="reportCategory">
+              <option value="spam">Spam</option>
+              <option value="harassment">Harassment</option>
+              <option value="spoilers">Unmarked spoilers</option>
+              <option value="other">Other</option>
+            </select></label
+          ><label
+            >Reason for reporting<textarea
+              v-model="reportReason"
+              minlength="3"
+              maxlength="1000"
+              required
+            /></label
+          ><button class="button ghost" :disabled="busy">Submit report</button>
+        </fieldset>
       </form>
     </article>
-    <p v-if="busy" role="status">Loading reviews...</p>
-    <p v-else-if="!rows.length" class="empty-state">
+    <p v-if="busy" role="status">
+      {{ loading ? "Loading reviews..." : "Updating reviews..." }}
+    </p>
+    <p v-else-if="!rows.length && !error" class="empty-state">
       No reviews match these filters yet.
     </p>
     <button

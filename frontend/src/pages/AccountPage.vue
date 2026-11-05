@@ -1,28 +1,20 @@
 <script setup lang="ts">
 import AlertDeliveryHistory from "../components/AlertDeliveryHistory.vue";
-import { reactive, ref, watch } from "vue";
+import { reactive, watch } from "vue";
 import { useAuthStore } from "../stores/auth";
 import { useWorkspaceStore } from "../stores/workspace";
-import {
-  deleteAlert,
-  fetchAlerts,
-  updateAlert,
-  type PriceAlert,
-} from "../services/alerts";
-import { socialMessage } from "../stores/social";
+import { usePriceAlerts } from "../composables/usePriceAlerts";
+import type { PriceAlert } from "../services/alerts";
 const auth = useAuthStore(),
   workspace = useWorkspaceStore(),
-  alerts = ref<PriceAlert[]>([]),
-  error = ref(""),
-  notice = ref(""),
-  busy = ref(false);
+  actions = usePriceAlerts();
+const { alerts, error, notice, busy, loading, load, toggle } = actions;
 type Rule = {
   mode: "target" | "percentage" | "historical-low";
   percent: number;
   cooldownHours: number;
 };
 const drafts = reactive<Record<string, Rule>>({});
-let generation = 0;
 function rule(id: string) {
   return (
     drafts[id] ??
@@ -34,59 +26,14 @@ function rule(id: string) {
     })
   );
 }
-async function load() {
-  const token = auth.token,
-    current = ++generation;
-  alerts.value = [];
-  if (!token || !auth.user) return;
-  busy.value = true;
-  error.value = "";
-  try {
-    const rows = await fetchAlerts(token);
-    if (current === generation && token === auth.token) alerts.value = rows;
-  } catch (e) {
-    if (current === generation) error.value = socialMessage(e);
-  } finally {
-    if (current === generation) busy.value = false;
-  }
-}
-async function toggle(alert: PriceAlert) {
-  const token = auth.token;
-  if (!token) return;
-  busy.value = true;
-  error.value = "";
-  try {
-    await updateAlert(token, alert.id, !alert.active);
-    if (token === auth.token) {
-      alert.active = !alert.active;
-      notice.value = alert.active ? "Alert resumed." : "Alert paused.";
-    }
-  } catch (e) {
-    if (token === auth.token) error.value = socialMessage(e);
-  } finally {
-    busy.value = false;
-  }
-}
 async function remove(alert: PriceAlert) {
-  const token = auth.token;
   if (
-    !token ||
-    !window.confirm("Delete this price alert? Stored prices will be retained.")
+    !busy.value &&
+    window.confirm(
+      "Delete this price alert? Stored prices and delivery history will be retained.",
+    )
   )
-    return;
-  busy.value = true;
-  error.value = "";
-  try {
-    await deleteAlert(token, alert.id);
-    if (token === auth.token) {
-      alerts.value = alerts.value.filter((a) => a.id !== alert.id);
-      notice.value = "Price alert removed.";
-    }
-  } catch (e) {
-    if (token === auth.token) error.value = socialMessage(e);
-  } finally {
-    busy.value = false;
-  }
+    await actions.remove(alert);
 }
 async function saveRule(id: string) {
   const r = { ...rule(id) };
@@ -116,8 +63,6 @@ watch(
   () => [auth.user?.id, auth.token],
   () => {
     Object.keys(drafts).forEach((k) => delete drafts[k]);
-    notice.value = "";
-    void load();
   },
   { immediate: true },
 );
@@ -143,7 +88,11 @@ watch(
         </button>
       </p>
       <p v-if="notice" role="status">{{ notice }}</p>
-      <p v-if="busy" role="status">Updating price alerts...</p>
+      <p v-if="busy" role="status">
+        {{
+          loading ? "Loading your price alerts..." : "Updating price alerts..."
+        }}
+      </p>
       <section class="account-panel">
         <div class="section-heading">
           <h2>{{ alerts.length }} price alerts</h2>
@@ -157,7 +106,7 @@ watch(
           repeatedly notify you. New observations older than 48 hours are not
           treated as fresh alerts.
         </p>
-        <p v-if="!alerts.length && !busy" class="empty-state">
+        <p v-if="!alerts.length && !busy && !error" class="empty-state">
           No alerts yet. Open a game and set a target to save its verified
           storefront identity and any available regional quote.
         </p>

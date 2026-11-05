@@ -52,6 +52,14 @@ watch(
   },
   { immediate: true },
 );
+function downloadDeviceBackup() {
+  const raw = library.deviceBackup();
+  if (raw === null) return;
+  const url = URL.createObjectURL(new Blob([raw], { type: "text/plain;charset=utf-8" }));
+  const anchor = document.createElement("a");
+  anchor.href = url; anchor.download = "gamevault-device-library-original.txt"; anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 import AppHeader from "./components/AppHeader.vue";
 </script>
 
@@ -65,6 +73,11 @@ import AppHeader from "./components/AppHeader.vue";
   </p>
   <p v-if="library.storageError" role="alert" class="storage-warning">
     {{ library.storageError }}
+    <template v-if="library.deviceUnreadable">
+      <button class="button ghost" @click="downloadDeviceBackup">Download original device data</button>
+      <button class="button ghost" @click="library.reloadDevice">Retry device data</button>
+      <span class="muted">The download stays on this device and may include private notes. It preserves the original text for recovery.</span>
+    </template>
   </p>
   <div v-if="library.syncError" role="alert" class="storage-warning">
     {{ library.syncError }}

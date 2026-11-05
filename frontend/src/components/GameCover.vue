@@ -5,19 +5,25 @@ const props = defineProps<{
   fallback?: string;
   title: string;
 }>();
-const failed = ref(false);
+const failed = ref(false),
+  exhausted = ref(false);
 watch(
-  () => props.cover,
-  () => (failed.value = false),
+  () => [props.cover, props.fallback],
+  () => {
+    failed.value = false;
+    exhausted.value = false;
+  },
 );
-const src = computed(() => (failed.value ? props.fallback : props.cover));
-const exhausted = ref(false);
-watch(
-  () => props.cover,
-  () => (exhausted.value = false),
+const src = computed(() =>
+  failed.value || !props.cover ? props.fallback : props.cover,
 );
 function onError() {
-  if (failed.value || !props.fallback || props.fallback === props.cover)
+  if (
+    !props.cover ||
+    failed.value ||
+    !props.fallback ||
+    props.fallback === props.cover
+  )
     exhausted.value = true;
   else failed.value = true;
 }

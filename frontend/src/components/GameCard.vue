@@ -65,7 +65,7 @@ const discount = (game: Game) =>
     <div class="card-actions">
       <button
         class="button ghost"
-        :disabled="!!library.find(game.slug)"
+        :disabled="library.deviceReadOnly || !!library.find(game.slug)"
         :aria-label="
           (library.find(game.slug) ? 'In library: ' : 'Add to Library: ') +
           game.title
@@ -75,6 +75,7 @@ const discount = (game: Game) =>
         {{ library.find(game.slug) ? "In Library" : "+ Library" }}</button
       ><button
         class="button ghost favorite-action"
+        :disabled="library.deviceReadOnly"
         :aria-pressed="!!library.find(game.slug)?.favorite"
         :aria-label="'Toggle favorite: ' + game.title"
         @click="library.favorite(game)"

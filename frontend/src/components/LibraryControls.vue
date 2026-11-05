@@ -18,7 +18,7 @@ const confirming = ref(false);
     <p class="muted">
       {{ library.scopeDescription }}
     </p>
-    <button v-if="!entry" class="button primary" @click="library.add(game)">
+    <button v-if="!entry" class="button primary" :disabled="library.deviceReadOnly" @click="library.add(game)">
       Add to Library
     </button>
     <template v-else>

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import ArtworkUpload from "../components/ArtworkUpload.vue";
-import { computed, ref, reactive, watch } from "vue";
+import { isAxiosError } from "axios";
+import { createOperationScope } from "../utils/requestScope";
+import { computed, ref, reactive, watch, onBeforeUnmount } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useAuthStore } from "../stores/auth";
 import { useLibraryStore } from "../stores/library";
@@ -34,6 +36,13 @@ const canEdit = computed(
     collection.value?.permission === "editor",
 );
 const publicationId = ref(crypto.randomUUID());
+const scope = createOperationScope(() => [
+  auth.token,
+  auth.user?.id,
+  route.params.id,
+]);
+const activity = ref("Loading collection...");
+onBeforeUnmount(() => scope.dispose());
 const draft = reactive({
   name: "",
   description: "",
@@ -55,6 +64,7 @@ const orderedGames = computed(() =>
     .filter((g): g is PublicGame => !!g),
 );
 function moveGame(index: number, direction: number) {
+  if (busy.value) return;
   if (index + direction < 0 || index + direction >= selected.value.length)
     return;
   const [slug] = selected.value.splice(index, 1);
@@ -72,33 +82,59 @@ function fill(c: Publication) {
   selected.value = c.games.map((g) => g.slug);
 }
 async function load() {
+  const current = scope.next();
   busy.value = true;
+  activity.value = "Loading collection...";
   error.value = "";
   collection.value = null;
+  members.value = [];
   try {
     if (isNew.value) {
       editing.value = true;
       return;
     }
-    collection.value = (
-      await social.request(
-        "/social/collections/" + encodeURIComponent(String(route.params.id)),
-      )
-    ).data;
+    const r = await social.request(
+      "/social/collections/" + encodeURIComponent(String(route.params.id)),
+    );
+    if (!current()) return;
+    collection.value = r.data;
     fill(collection.value!);
     if (collection.value && collection.value.userId === auth.user?.id) {
-      const r = await social.request(
+      const m = await social.request(
         "/social/collections/" + collection.value.id + "/members",
       );
-      members.value = Array.isArray(r.data) ? r.data : [];
+      if (current()) members.value = Array.isArray(m.data) ? m.data : [];
     }
   } catch (e) {
-    error.value = socialMessage(e);
+    if (current()) error.value = socialMessage(e);
   } finally {
-    busy.value = false;
+    if (current()) busy.value = false;
+  }
+}
+async function perform(
+  work: (current: () => boolean) => Promise<void>,
+  conflictMessage?: string,
+) {
+  if (busy.value) return;
+  const current = scope.next();
+  busy.value = true;
+  activity.value = "Updating collection...";
+  error.value = "";
+  notice.value = "";
+  try {
+    await work(current);
+  } catch (e) {
+    if (current())
+      error.value =
+        conflictMessage && isAxiosError(e) && e.response?.status === 409
+          ? conflictMessage
+          : socialMessage(e);
+  } finally {
+    if (current()) busy.value = false;
   }
 }
 function usePrivate() {
+  if (busy.value) return;
   const c = workspace.data.collections.find((c) => c.id === source.value);
   if (!c) return;
   draft.name = c.name;
@@ -106,136 +142,164 @@ function usePrivate() {
     .filter((e) => workspace.meta(e.game.slug).collectionIds.includes(c.id))
     .map((e) => e.game.slug);
 }
-async function save() {
-  busy.value = true;
+function editCollection() {
+  if (busy.value || !collection.value || !canEdit.value) return;
+  fill(collection.value);
   error.value = "";
-  try {
+  notice.value = "";
+  editing.value = true;
+}
+function cancelEdit() {
+  if (busy.value) return;
+  if (collection.value) fill(collection.value);
+  editing.value = false;
+  error.value = "";
+}
+async function reloadSaved() {
+  if (busy.value) return;
+  if (
+    editing.value &&
+    !window.confirm("Discard your current draft and load the saved collection?")
+  )
+    return;
+  editing.value = false;
+  await load();
+}
+async function save() {
+  if (!social.me || (!isNew.value && !canEdit.value)) return;
+  await perform(async (current) => {
+    const creating = isNew.value,
+      id = collection.value?.id;
     const r = await social.request(
-      "/social/collections" + (isNew.value ? "" : "/" + collection.value!.id),
-      isNew.value ? "POST" : "PATCH",
+      "/social/collections" + (creating ? "" : "/" + id),
+      creating ? "POST" : "PATCH",
       {
         ...draft,
-        ...(isNew.value ? { id: publicationId.value } : {}),
+        ...(creating ? { id: publicationId.value } : {}),
         games: orderedGames.value.map(publicGame),
       },
     );
+    if (!current()) return;
     notice.value =
       "Collection saved. Shared collections are independent of your private workspace.";
-    if (isNew.value)
-      await router.replace("/community/collections/" + r.data.id);
+    if (creating) await router.replace("/community/collections/" + r.data.id);
     else {
       collection.value = { ...collection.value, ...r.data };
       editing.value = false;
       fill(collection.value!);
     }
-  } catch (e) {
-    error.value = socialMessage(e);
-  } finally {
-    busy.value = false;
-  }
+  }, "This collection changed or is unavailable. Your draft is kept. Reload the saved collection to discard this draft and load its current version.");
 }
 async function invite() {
   if (!collection.value) return;
-  busy.value = true;
-  error.value = "";
-  try {
-    await social.request(
-      "/social/collections/" + collection.value.id + "/members",
-      "POST",
-      { username: inviteName.value, role: inviteRole.value },
-    );
-    members.value = (
-      await social.request(
-        "/social/collections/" + collection.value.id + "/members",
-      )
-    ).data;
+  const id = collection.value.id;
+  await perform(async (current) => {
+    await social.request("/social/collections/" + id + "/members", "POST", {
+      username: inviteName.value,
+      role: inviteRole.value,
+    });
+    if (!current()) return;
+    const r = await social.request("/social/collections/" + id + "/members");
+    if (!current()) return;
+    members.value = Array.isArray(r.data) ? r.data : [];
     inviteName.value = "";
     notice.value =
       "Invitation sent. The player must accept before gaining access.";
-  } catch (e) {
-    error.value = socialMessage(e);
-  } finally {
-    busy.value = false;
-  }
+  });
 }
 async function removeMember(id: string) {
   if (!collection.value) return;
-  busy.value = true;
-  try {
+  const collectionId = collection.value.id;
+  await perform(async (current) => {
     await social.request(
-      "/social/collections/" + collection.value.id + "/members/" + id,
+      "/social/collections/" + collectionId + "/members/" + id,
       "DELETE",
     );
-    members.value = members.value.filter((m) => m.userId !== id);
-  } catch (e) {
-    error.value = socialMessage(e);
-  } finally {
-    busy.value = false;
-  }
+    if (current()) members.value = members.value.filter((m) => m.userId !== id);
+  });
 }
 async function feature() {
   if (!collection.value) return;
-  busy.value = true;
-  try {
-    await social.request(
-      "/social/collections/" + collection.value.id + "/feature",
-      "POST",
-      { featured: !collection.value.featured },
-    );
-    await load();
-  } catch (e) {
-    error.value = socialMessage(e);
-  } finally {
-    busy.value = false;
-  }
+  const c = collection.value;
+  await perform(async (current) => {
+    await social.request("/social/collections/" + c.id + "/feature", "POST", {
+      featured: !c.featured,
+    });
+    if (current()) await load();
+  });
 }
 async function follow() {
   if (!collection.value) return;
-  busy.value = true;
-  try {
+  const c = collection.value;
+  await perform(async (current) => {
     await social.request(
-      "/social/collections/" + collection.value.id + "/follow",
-      collection.value.followed ? "DELETE" : "POST",
+      "/social/collections/" + c.id + "/follow",
+      c.followed ? "DELETE" : "POST",
       {},
     );
-    await load();
-  } catch (e) {
-    error.value = socialMessage(e);
-  } finally {
-    busy.value = false;
-  }
+    if (current()) await load();
+  });
 }
 async function remove() {
-  if (!collection.value || !window.confirm("Delete this shared collection?"))
+  if (
+    busy.value ||
+    !collection.value ||
+    !window.confirm("Delete this shared collection?")
+  )
     return;
-  busy.value = true;
-  try {
+  const c = collection.value;
+  await perform(async (current) => {
     await social.request(
-      "/social/collections/" +
-        collection.value.id +
-        "?version=" +
-        collection.value.version,
+      "/social/collections/" + c.id + "?version=" + c.version,
       "DELETE",
     );
-    await router.push("/community");
-  } catch (e) {
-    error.value = socialMessage(e);
-  } finally {
-    busy.value = false;
-  }
+    if (current()) await router.push("/community");
+  });
 }
 watch(
-  () => [route.params.id, auth.user?.id],
-  () => void load(),
+  () => [route.params.id, auth.user?.id, auth.token],
+  () => {
+    scope.invalidate();
+    busy.value = false;
+    error.value = "";
+    notice.value = "";
+    collection.value = null;
+    members.value = [];
+    editing.value = false;
+    source.value = "";
+    selected.value = [];
+    inviteName.value = "";
+    inviteRole.value = "viewer";
+    publicationId.value = crypto.randomUUID();
+    Object.assign(draft, {
+      name: "",
+      description: "",
+      cover: "",
+      theme: "",
+      visibility: "private",
+      version: 0,
+    });
+    void load();
+  },
   { immediate: true },
 );
 </script>
 <template>
   <div class="page-container social-page">
     <RouterLink to="/community">Back to community</RouterLink>
-    <p v-if="error" role="alert" class="form-error">{{ error }}</p>
+    <p v-if="error" role="alert" class="form-error">
+      {{ error }}
+      <button
+        v-if="!isNew"
+        class="button ghost"
+        :disabled="busy"
+        @click="reloadSaved"
+      >
+        Reload saved collection
+      </button>
+    </p>
     <p v-if="notice" role="status">{{ notice }}</p>
-    <p v-if="busy" role="status">Loading collection...</p>
+    <p v-if="busy" role="status">{{ activity }}</p>
     <template v-if="isNew || collection"
       ><div class="section-heading">
         <div>
@@ -248,103 +312,109 @@ watch(
         collections.
       </p>
       <form
-        v-if="editing && social.me"
+        v-if="editing && social.me && (isNew || canEdit)"
         class="account-panel social-form"
         @submit.prevent="save"
       >
-        <label v-if="isNew && workspace.data.collections.length"
-          >Start from a private collection<select
-            v-model="source"
-            @change="usePrivate"
-          >
-            <option value="">Choose a collection</option>
-            <option
-              v-for="c in workspace.data.collections"
-              :key="c.id"
-              :value="c.id"
-            >
-              {{ c.name }}
-            </option>
-          </select></label
-        ><label
-          >Name<input v-model="draft.name" maxlength="80" required /></label
-        ><label
-          >Description<textarea
-            v-model="draft.description"
-            maxlength="2000"
-            rows="4"
-          /></label
-        ><label
-          >Cover URL<input
-            v-model="draft.cover"
-            maxlength="1024"
-            type="url"
-            placeholder="https://..." /></label
-        ><ArtworkUpload
-          label="Upload collection artwork"
-          @uploaded="draft.cover = $event"
-        /><label
-          >Genre or theme<input v-model="draft.theme" maxlength="80" /></label
-        ><label
-          >Visibility<select
-            v-model="draft.visibility"
-            :disabled="!isNew && collection?.permission === 'editor'"
-          >
-            <option value="private">Private - only you</option>
-            <option value="public">Share with profile viewers</option>
-          </select></label
+        <fieldset
+          class="social-editor-fields"
+          aria-label="Collection editor"
+          :disabled="busy"
         >
-        <fieldset>
-          <legend>Select up to 100 games from your library</legend>
-          <label v-for="g in available" :key="g.slug" class="check-label"
-            ><input
-              v-model="selected"
-              :value="g.slug"
-              type="checkbox"
-              :disabled="!selected.includes(g.slug) && selected.length >= 100"
-            />{{ g.title }}</label
+          <label v-if="isNew && workspace.data.collections.length"
+            >Start from a private collection<select
+              v-model="source"
+              @change="usePrivate"
+            >
+              <option value="">Choose a collection</option>
+              <option
+                v-for="c in workspace.data.collections"
+                :key="c.id"
+                :value="c.id"
+              >
+                {{ c.name }}
+              </option>
+            </select></label
+          ><label
+            >Name<input v-model="draft.name" maxlength="80" required /></label
+          ><label
+            >Description<textarea
+              v-model="draft.description"
+              maxlength="2000"
+              rows="4"
+            /></label
+          ><label
+            >Cover URL<input
+              v-model="draft.cover"
+              maxlength="1024"
+              type="url"
+              placeholder="https://..." /></label
+          ><ArtworkUpload
+            label="Upload collection artwork"
+            @uploaded="draft.cover = $event"
+          /><label
+            >Genre or theme<input v-model="draft.theme" maxlength="80" /></label
+          ><label
+            >Visibility<select
+              v-model="draft.visibility"
+              :disabled="!isNew && collection?.permission === 'editor'"
+            >
+              <option value="private">Private - only you</option>
+              <option value="public">Share with profile viewers</option>
+            </select></label
           >
-          <p v-if="!available.length">
-            Add games to your library first, or save an empty collection.
-          </p>
+          <fieldset>
+            <legend>Select up to 100 games from your library</legend>
+            <label v-for="g in available" :key="g.slug" class="check-label"
+              ><input
+                v-model="selected"
+                :value="g.slug"
+                type="checkbox"
+                :disabled="!selected.includes(g.slug) && selected.length >= 100"
+              />{{ g.title }}</label
+            >
+            <p v-if="!available.length">
+              Add games to your library first, or save an empty collection.
+            </p>
+          </fieldset>
+          <section aria-label="Collection game order">
+            <h2>Game order</h2>
+            <ol>
+              <li v-for="(g, i) in orderedGames" :key="g.slug">
+                <span>{{ g.title }}</span
+                ><button
+                  class="button ghost"
+                  type="button"
+                  :aria-label="'Move ' + g.title + ' up'"
+                  :disabled="i === 0"
+                  @click="moveGame(i, -1)"
+                >
+                  Move up</button
+                ><button
+                  class="button ghost"
+                  type="button"
+                  :aria-label="'Move ' + g.title + ' down'"
+                  :disabled="i === orderedGames.length - 1"
+                  @click="moveGame(i, 1)"
+                >
+                  Move down
+                </button>
+              </li>
+            </ol>
+          </section>
+          <div class="hero-actions">
+            <button class="button primary" :disabled="busy">
+              Save collection</button
+            ><button
+              v-if="!isNew"
+              type="button"
+              class="button ghost"
+              @click="cancelEdit"
+            >
+              Cancel edit
+            </button>
+          </div>
         </fieldset>
-        <section aria-label="Collection game order">
-          <h2>Game order</h2>
-          <ol>
-            <li v-for="(g, i) in orderedGames" :key="g.slug">
-              <span>{{ g.title }}</span
-              ><button
-                class="button ghost"
-                type="button"
-                :aria-label="'Move ' + g.title + ' up'"
-                :disabled="i === 0"
-                @click="moveGame(i, -1)"
-              >
-                Move up</button
-              ><button
-                class="button ghost"
-                type="button"
-                :aria-label="'Move ' + g.title + ' down'"
-                :disabled="i === orderedGames.length - 1"
-                @click="moveGame(i, 1)"
-              >
-                Move down
-              </button>
-            </li>
-          </ol>
-        </section>
-        <div class="hero-actions">
-          <button class="button primary" :disabled="busy">
-            Save collection</button
-          ><button
-            v-if="!isNew"
-            type="button"
-            class="button ghost"
-            @click="editing = false"
-          >
-            Cancel edit
-          </button>
-        </div>
       </form>
       <template v-else-if="collection"
         ><img
@@ -368,10 +438,8 @@ watch(
           <template v-if="canEdit"
             ><button
               class="button primary"
-              @click="
-                fill(collection);
-                editing = true;
-              "
+              :disabled="busy"
+              @click="editCollection"
             >
               Edit collection</button
             ><button
@@ -417,10 +485,11 @@ watch(
             <label
               >Player username<input
                 v-model="inviteName"
+                :disabled="busy"
                 maxlength="30"
                 required /></label
             ><label
-              >Permission<select v-model="inviteRole">
+              >Permission<select v-model="inviteRole" :disabled="busy">
                 <option value="viewer">Viewer</option>
                 <option value="editor">Editor</option>
               </select></label
