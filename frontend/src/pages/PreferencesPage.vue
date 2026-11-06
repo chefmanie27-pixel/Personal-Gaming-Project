@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import RestorePreview from "../components/RestorePreview.vue";
+import PrivateDataExport from "../components/PrivateDataExport.vue";
 import { ref, watch } from "vue";
 import { useWorkspaceStore } from "../stores/workspace";
 const workspace = useWorkspaceStore();
@@ -118,7 +120,7 @@ async function save() {
       <p v-if="formError" role="alert">{{ formError }}</p>
       <button
         class="button primary"
-        :disabled="!workspace.ready || workspace.busy"
+        :disabled="!workspace.ready || workspace.busy || !!workspace.error"
       >
         Save profile and preferences
       </button>
@@ -138,12 +140,14 @@ async function save() {
       </p>
       <button
         class="button ghost"
-        :disabled="workspace.busy || workspace.importing || !workspace.ready || !!workspace.error"
+        :disabled="workspace.busy || workspace.importing || !workspace.ready || !!workspace.error || workspace.deviceUnreadable"
         @click="workspace.importDevice"
       >
         Import device workspace
       </button>
     </section>
+    <PrivateDataExport />
+    <RestorePreview />
     <p class="muted">
       Password reset and release emails are not enabled: this installation has
       no email delivery service. Manage login and price alerts from your

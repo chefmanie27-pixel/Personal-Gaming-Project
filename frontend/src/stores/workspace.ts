@@ -1,6 +1,7 @@
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 import axios from "axios";
+import { validateWorkspaceSnapshot } from "../utils/workspaceValidation";
 import type { Game } from "../types";
 export interface GameMeta {
   completedAt: string | null;
@@ -81,6 +82,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     notice = ref("");
   const journalMode = ref<"legacy" | "normalized">("legacy");
   const importing = ref(false);
+  const deviceUnreadable = ref(false), deviceError = ref("");
   const sessionKey = ref("guest");
   let token: string | null = null,
     version = 0,
@@ -88,22 +90,31 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   let queue = Promise.resolve();
   function device() {
     try {
-      const raw = JSON.parse(localStorage.getItem(key) ?? "null");
-      if (!raw) return blankWorkspace();
-      if (
-        !Array.isArray(raw.collections) ||
-        !Array.isArray(raw.journal) ||
-        !Array.isArray(raw.watches) ||
-        !raw.preferences ||
-        !raw.metadata
-      )
-        throw new Error();
-      return { ...blankWorkspace(), ...raw } as Workspace;
+      const raw = localStorage.getItem(key);
+      if (raw !== null && new TextEncoder().encode(raw).length > 4 * 1024 * 1024) throw new Error("Workspace too large");
+      const saved = raw === null ? blankWorkspace() : validateWorkspaceSnapshot(JSON.parse(raw));
+      deviceUnreadable.value = false; deviceError.value = "";
+      return saved;
     } catch {
-      error.value =
-        "Device workspace could not be read. Its saved data has not been overwritten.";
+      deviceUnreadable.value = true;
+      deviceError.value = "Device workspace could not be read completely. Its original data is preserved; repair it before device editing or import.";
+      if (!account.value) error.value = deviceError.value;
       return blankWorkspace();
     }
+  }
+  function deviceBackup(): string | null {
+    try { return localStorage.getItem(key); }
+    catch { deviceError.value = "Device workspace storage could not be accessed. No data was changed."; return null; }
+  }
+  function reloadDevice() {
+    if (busy.value || importing.value) return false;
+    const saved = device();
+    if (!account.value) {
+      data.value = saved;
+      error.value = deviceUnreadable.value ? deviceError.value : "";
+      ready.value = !deviceUnreadable.value;
+    }
+    return !deviceUnreadable.value;
   }
   const scope = computed(() =>
     account.value
@@ -125,7 +136,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     queue = Promise.resolve();
     if (!nextToken) {
       data.value = device();
-      ready.value = true;
+      ready.value = !deviceUnreadable.value;
       return;
     }
     if (!userId) return;
@@ -134,7 +145,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         headers: { Authorization: "Bearer " + nextToken },
       });
       if (current === generation) {
-        data.value = response.data.data;
+        data.value = validateWorkspaceSnapshot(response.data.data);
         journalMode.value = response.data.journalMode ?? "legacy";
         version = response.data.version;
         ready.value = true;
@@ -237,7 +248,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   async function importDevice() {
     if (importing.value || busy.value || !ready.value || error.value || !token) return false;
     const saved = device();
-    if (error.value) return false;
+    if (error.value || deviceUnreadable.value) return false;
     const current = generation, auth = token;
     importing.value = true;
     try {
@@ -310,6 +321,10 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     sessionKey,
     journalMode,
     importing,
+    deviceUnreadable,
+    deviceError,
+    deviceBackup,
+    reloadDevice,
     ready,
     busy,
     error,

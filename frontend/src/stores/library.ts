@@ -9,13 +9,8 @@ import {
   importLibraryEntries,
 } from "../services/library";
 import type { Game } from "../types";
-export const statuses = [
-  "Want to Play",
-  "Currently Playing",
-  "Completed",
-  "On Hold",
-  "Dropped",
-] as const;
+import { libraryStatuses, validateLibraryEntries } from "../utils/libraryValidation";
+export const statuses = libraryStatuses;
 export type PlayingStatus = (typeof statuses)[number];
 export interface LibraryEntry {
   game: Game;
@@ -52,16 +47,7 @@ export const useLibraryStore = defineStore("library", () => {
   );
   function readDevice(): LibraryEntry[] {
     try {
-      const saved: unknown = JSON.parse(localStorage.getItem(key) ?? "[]");
-      if (!Array.isArray(saved) || !saved.every((e): e is LibraryEntry =>
-        !!e && typeof e.game?.slug === "string" && e.game.slug.length > 0 &&
-        typeof e.game.title === "string" &&
-        Array.isArray(e.game.genres) && e.game.genres.every((g: unknown) => typeof g === "string") &&
-        Array.isArray(e.game.platforms) && e.game.platforms.every((g: unknown) => typeof g === "string") &&
-        typeof e.game.store === "string" && statuses.includes(e.status) && typeof e.favorite === "boolean" &&
-        (e.rating === null || (Number.isFinite(e.rating) && e.rating >= 0 && e.rating <= 10)) &&
-        Number.isFinite(e.hours) && e.hours >= 0 && typeof e.notes === "string" && typeof e.addedAt === "string"
-      )) throw new Error("Invalid saved library");
+      const saved = validateLibraryEntries(JSON.parse(localStorage.getItem(key) ?? "[]"));
       if (deviceUnreadable.value) storageError.value = "";
       deviceUnreadable.value = false;
       return saved;

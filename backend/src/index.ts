@@ -12,6 +12,9 @@ import { artworkRouter } from "./artwork.js";
 import { steamLibrary } from "./steamLibrary.js";
 import { createSocialRouter } from "./social.js";
 import "dotenv/config";
+import { createPrivateExportRouter } from "./privateExport.js";
+import { createRestorePreparationRouter } from "./restorePreparation.js";
+import { databasePrivateExport } from "./privateExportRepository.js";
 import { createJournalRouter } from "./journal.js";
 import { databaseJournal } from "./journalRepository.js";
 import { createWorkspaceRouter } from "./workspace.js";
@@ -81,6 +84,8 @@ app.use(
   }),
   artworkRouter,
 );
+app.use("/api/private-export", createPrivateExportRouter(databasePrivateExport));
+app.use("/api/private-restore", createRestorePreparationRouter(databasePrivateExport));
 app.use(express.json());
 app.use("/api/discussions", createDiscussionsRouter());
 app.use("/api/games", observationRouter);

@@ -52,13 +52,18 @@ watch(
   },
   { immediate: true },
 );
-function downloadDeviceBackup() {
-  const raw = library.deviceBackup();
+function downloadOriginalData(raw: string | null, filename: string) {
   if (raw === null) return;
   const url = URL.createObjectURL(new Blob([raw], { type: "text/plain;charset=utf-8" }));
   const anchor = document.createElement("a");
-  anchor.href = url; anchor.download = "gamevault-device-library-original.txt"; anchor.click();
+  anchor.href = url; anchor.download = filename; anchor.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function downloadDeviceBackup() {
+  downloadOriginalData(library.deviceBackup(), "gamevault-device-library-original.txt");
+}
+function downloadWorkspaceBackup() {
+  downloadOriginalData(workspace.deviceBackup(), "gamevault-device-workspace-original.txt");
 }
 import AppHeader from "./components/AppHeader.vue";
 </script>
@@ -105,7 +110,13 @@ import AppHeader from "./components/AppHeader.vue";
       &times;
     </button>
   </div>
-  <div v-if="workspace.error" class="storage-warning" role="alert">
+  <div v-if="workspace.deviceError" class="storage-warning workspace-recovery" role="alert">
+    {{ workspace.deviceError }}
+    <button class="button ghost" @click="downloadWorkspaceBackup">Download original workspace data</button>
+    <button class="button ghost" :disabled="workspace.busy || workspace.importing" @click="workspace.reloadDevice">Retry device workspace</button>
+    <span class="muted">This local recovery copy may include private journal entries and preferences. It preserves the original text.</span>
+  </div>
+  <div v-if="workspace.error && workspace.error !== workspace.deviceError" class="storage-warning" role="alert">
     {{ workspace.error }}
     <button
       class="button ghost"

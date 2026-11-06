@@ -100,6 +100,7 @@ async function port() {
   let detailMediaFixture = false, relatedFixture = false, failRelatedSecond = false, holdRelatedEditions = false, releaseRelatedEditions = null;
   let holdWishlist = false, wishlistWrites = 0;
   const wishlistReleases = [];
+  let failPrivateExport = false, holdPrivateExport = false, releasePrivateExport = null, privateExportReads = 0;
   let failGames = false;
   let catalogueFilterFixtures = false;
   let cataloguePaged = false, failCataloguePage = null, holdCatalogueSearch = null, releaseCatalogueRead = null;
@@ -733,6 +734,14 @@ async function port() {
     const url = new URL(req.url, "http://localhost");
     requests.push(url.pathname + url.search);
     let body;
+    if (url.pathname === "/api/private-export") {
+      privateExportReads++;
+      const { journal: embedded, ...metadata } = accountWorkspace.data;
+      if (failPrivateExport) { res.statusCode = 503; body = { error: "Export fixture unavailable. Please retry." }; }
+      else body = { format: "gamevault-private-data", formatVersion: 1, exportedAt: new Date().toISOString(), source: { kind: "account", journalMode: "normalized" }, consistency: { kind: "transaction-snapshot", workspaceVersion: accountWorkspace.version }, data: { library: [...accountEntries.values()], workspace: metadata, journal: [...accountJournal.values()] } };
+      if (holdPrivateExport) { releasePrivateExport = () => res.end(JSON.stringify(body)); return; }
+      res.end(JSON.stringify(body)); return;
+    }
     if (url.pathname === "/fixture-screenshot.svg") {
       res.setHeader("Cache-Control", "no-store");
       if (failScreenshot) { res.statusCode = 503; res.end("Screenshot unavailable"); }
@@ -1736,6 +1745,116 @@ async function port() {
         ),
       "server journal search",
     );
+    await navigate("/preferences", ".private-export");
+    await waitFor(() => evaluate('document.querySelector(".private-export button").getAttribute("aria-disabled")==="false"'), "account export prerequisites");
+    await evaluate('window.__privateFiles=[];HTMLAnchorElement.prototype.click=function(){window.__privateFiles.push({name:this.download,text:fetch(this.href).then(r=>r.text())});};');
+    failPrivateExport = true;
+    await evaluate('document.querySelector(".private-export button").click()');
+    await waitFor(() => evaluate('document.querySelector("#private-export-error").textContent.includes("Export fixture unavailable")'), "export failure has retry feedback");
+    assert.equal(await evaluate('window.__privateFiles.length'), 0);
+    failPrivateExport = false; holdPrivateExport = true;
+    const exportReadsBefore = privateExportReads;
+    await evaluate('document.querySelector(".private-export button").focus();document.querySelector(".private-export button").click();document.querySelector(".private-export button").click()');
+    await waitFor(() => Promise.resolve(!!releasePrivateExport), "held account export");
+    assert.equal(privateExportReads - exportReadsBefore, 1);
+    assert.equal(await evaluate('document.activeElement===document.querySelector(".private-export button")'), true);
+    holdPrivateExport = false; releasePrivateExport(); releasePrivateExport = null;
+    await waitFor(() => evaluate('window.__privateFiles.length===1'), "complete account JSON download");
+    const accountFile = JSON.parse(await evaluate('window.__privateFiles[0].text'));
+    assert.equal(accountFile.data.journal.length, accountJournal.size);
+    assert.equal(accountFile.data.journal.length, 53);
+    assert.equal(accountFile.data.library.length, accountEntries.size);
+    assert.equal(accountFile.source.kind, "account");
+    assert.equal("journal" in accountFile.data.workspace, false);
+    const originalWorkspaceForExport = await evaluate('localStorage.getItem("gamevault_workspace_v1")');
+    await evaluate('{const source=document.querySelector(".private-export select");source.value="device";source.dispatchEvent(new Event("change",{bubbles:true}));}');
+    await evaluate('document.querySelector(".private-export button").click()');
+    await waitFor(() => evaluate('window.__privateFiles.length===2'), "separate device JSON download");
+    const deviceFile = JSON.parse(await evaluate('window.__privateFiles[1].text'));
+    assert.equal(deviceFile.source.kind, "device");
+    assert.deepEqual(deviceFile.data.workspace.profile, JSON.parse(originalWorkspaceForExport).profile);
+    assert.equal(deviceFile.data.journal.length, JSON.parse(originalWorkspaceForExport).journal.length);
+    assert.equal(await evaluate('localStorage.getItem("gamevault_workspace_v1")'), originalWorkspaceForExport);
+    for (const width of [320, 375, 768, 1440]) {
+      await cdp("Emulation.setDeviceMetricsOverride", { width, height: 1000, deviceScaleFactor: 1, mobile: width < 600 });
+      assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'), true, "private export layout at " + width);
+    }
+    await evaluate('{const source=document.querySelector(".private-export select");source.value="account";source.dispatchEvent(new Event("change",{bubbles:true}));}');
+    holdPrivateExport = true;
+    await evaluate('document.querySelector(".private-export button").click()');
+    await waitFor(() => Promise.resolve(!!releasePrivateExport), "export held across authentication change");
+    await evaluate('document.querySelector(".auth-signout").click()');
+    await waitFor(() => evaluate('!!document.querySelector("button.avatar")'), "export sign out");
+    await evaluate('document.querySelector("button.avatar").click()');
+    await waitFor(() => evaluate('!!document.querySelector(".auth-dialog form")'), "export reauthentication dialog");
+    await evaluate('(()=>{const f=document.querySelector(".auth-dialog form"),email=f.querySelector("input[type=email]"),password=f.querySelector("input[type=password]");email.value="fixture@example.invalid";email.dispatchEvent(new Event("input",{bubbles:true}));password.value="fixture-password";password.dispatchEvent(new Event("input",{bubbles:true}));f.requestSubmit();})()');
+    await waitFor(() => evaluate('!!document.querySelector(".auth-signout")&&document.querySelector(".private-export button").getAttribute("aria-disabled")==="false"'), "export new session ready");
+    holdPrivateExport = false; releasePrivateExport(); releasePrivateExport = null;
+    await delay(100);
+    assert.equal(await evaluate('window.__privateFiles.length'), 2, "obsolete private response cannot download after same-token sign-in");
+    async function choosePreviewFile(contents, name = "private-preview.json") {
+      await evaluate('(()=>{const payload='+JSON.stringify({contents,name})+';const files=new DataTransfer();files.items.add(new File([payload.contents],payload.name,{type:"application/json"}));const input=document.querySelector(".restore-preview input[type=file]");input.files=files.files;input.dispatchEvent(new Event("change",{bubbles:true}));})()');
+    }
+    const accountBeforePreview = JSON.stringify(accountWorkspace), libraryBeforePreview = JSON.stringify([...accountEntries.values()]);
+    const invalidPreview = { ...accountFile, formatVersion: 99 };
+    const readsBeforeInvalidPreview = privateExportReads;
+    await choosePreviewFile(JSON.stringify(invalidPreview));
+    await evaluate('document.querySelector(".preview-backup").click()');
+    await waitFor(() => evaluate('document.querySelector("#restore-preview-error").textContent.includes("version is not supported")'), "unsupported backup format feedback");
+    assert.equal(privateExportReads, readsBeforeInvalidPreview);
+    assert.equal(await evaluate('document.querySelector(".restore-preview input[type=file]").getAttribute("aria-invalid")'), "true");
+    assert.equal(await evaluate('!!document.querySelector(".restore-preview-summary")'), false);
+    const previewBackup = JSON.parse(JSON.stringify(accountFile));
+    previewBackup.data.journal.push({ ...previewBackup.data.journal[0], id: "legacy-preview-row", notes: "Private preview text <script>must not render</script>" });
+    const previewText = JSON.stringify(previewBackup);
+    await choosePreviewFile(previewText);
+    await evaluate('document.querySelector(".preview-backup").focus();document.querySelector(".preview-backup").click();document.querySelector(".preview-backup").click()');
+    await waitFor(() => evaluate('!!document.querySelector(".restore-preview-summary")'), "complete read-only restore preview");
+    assert.equal(privateExportReads, readsBeforeInvalidPreview + 1);
+    assert.deepEqual(await evaluate('[...[...document.querySelectorAll(".restore-preview tbody tr")].find(r=>r.querySelector("th").textContent==="Journal entries").querySelectorAll("td")].map(cell=>Number(cell.textContent))'), [54, 1, 53]);
+    assert.equal(await evaluate('document.querySelector(".preview-issues").textContent.includes("legacy identifiers")'), true);
+    assert.equal(await evaluate('document.querySelector(".restore-preview input[type=file]").files[0].text()'), previewText, "preview does not rewrite legacy IDs or file text");
+    assert.equal(await evaluate('!!document.querySelector(".restore-preview-summary script")'), false);
+    assert.equal(await evaluate('document.activeElement===document.querySelector(".preview-backup")'), true);
+    assert.equal(await evaluate('window.__privateFiles.length'), 2, "preview starts no download");
+    assert.equal(JSON.stringify(accountWorkspace), accountBeforePreview);
+    assert.equal(JSON.stringify([...accountEntries.values()]), libraryBeforePreview);
+    for (const width of [320, 375, 768, 1440]) {
+      await cdp("Emulation.setDeviceMetricsOverride", { width, height: 1000, deviceScaleFactor: 1, mobile: width < 600 });
+      assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'), true, "read-only preview layout at " + width);
+    }
+    const savedDeviceBeforePreview = await evaluate('localStorage.getItem("gamevault_workspace_v1")');
+    await evaluate('{const target=document.querySelector(".restore-preview select");target.value="device";target.dispatchEvent(new Event("change",{bubbles:true}));}');
+    assert.equal(await evaluate('!!document.querySelector(".restore-preview-summary")'), false, "destination changes require a fresh comparison");
+    await evaluate('document.querySelector(".preview-backup").click()');
+    await waitFor(() => evaluate('!!document.querySelector(".restore-preview-summary")'), "device conflict preview");
+    assert.equal(privateExportReads, readsBeforeInvalidPreview + 1);
+    assert.equal(await evaluate('localStorage.getItem("gamevault_workspace_v1")'), savedDeviceBeforePreview);
+    await evaluate('window.dispatchEvent(new StorageEvent("storage",{key:"unrelated"}))');
+    assert.equal(await evaluate('!!document.querySelector(".restore-preview-summary")'), true);
+    await evaluate('window.dispatchEvent(new StorageEvent("storage",{key:"gamevault_workspace_v1"}))');
+    assert.equal(await evaluate('!!document.querySelector(".restore-preview-summary")'), false, "cross-tab changes invalidate conflict counts");
+    assert.equal(await evaluate('document.querySelector(".restore-preview input[type=file]").files.length'), 1, "invalidation retains the selected original file");
+    assert.equal(await evaluate('document.querySelector("#restore-preview-error").textContent.includes("may have changed")'), true);
+    await evaluate('document.querySelector(".preview-backup").click()');
+    await waitFor(() => evaluate('!!document.querySelector(".restore-preview-summary")'), "refreshed device conflict preview");
+    await evaluate('window.dispatchEvent(new Event("focus"))');
+    assert.equal(await evaluate('!!document.querySelector(".restore-preview-summary")'), false, "returning to the page requires a fresh comparison");
+    await evaluate('document.querySelector(".preview-backup").click()');
+    await waitFor(() => evaluate('!!document.querySelector(".restore-preview-summary")'), "preview after returning focus");
+    assert.equal(privateExportReads, readsBeforeInvalidPreview + 1);
+    assert.equal(await evaluate('localStorage.getItem("gamevault_workspace_v1")'), savedDeviceBeforePreview);
+    await evaluate('document.querySelector(".clear-backup").click()');
+    assert.equal(await evaluate('document.querySelector(".restore-preview input[type=file]").files.length'), 0);
+    await evaluate('{const target=document.querySelector(".restore-preview select");target.value="account";target.dispatchEvent(new Event("change",{bubbles:true}));window.__nativeBackupRead=File.prototype.arrayBuffer;File.prototype.arrayBuffer=function(){return new Promise(resolve=>{window.__releaseBackupRead=()=>window.__nativeBackupRead.call(this).then(resolve);});};}');
+    await choosePreviewFile(previewText);
+    await evaluate('document.querySelector(".preview-backup").click()');
+    await waitFor(() => evaluate('typeof window.__releaseBackupRead==="function"'), "held local backup read");
+    await evaluate('document.querySelector(".clear-backup").click();window.__releaseBackupRead();File.prototype.arrayBuffer=window.__nativeBackupRead;');
+    await delay(100);
+    assert.equal(privateExportReads, readsBeforeInvalidPreview + 1, "cancelled local read cannot start an account comparison");
+    assert.equal(await evaluate('!!document.querySelector(".restore-preview-summary")'), false);
+    assert.equal(await evaluate('document.querySelector(".restore-preview input[type=file]").files.length'), 0);
     failSummaryYear = 2025;
     await navigate("/wrapped", ".dashboard-stats");
     await evaluate('document.querySelector(".year-control input").value=2026;document.querySelector(".year-control input").dispatchEvent(new Event("input",{bubbles:true}))');
@@ -2984,6 +3103,26 @@ async function port() {
     await navigate("/library", ".game-card");
     assert.equal(await evaluate('document.querySelectorAll(".game-card").length'), 1);
     assert.equal(await evaluate('JSON.parse(localStorage.getItem("gamevault_library_v1"))[0].notes'), "Recovered device fixture");
+    const invalidWorkspaceText = JSON.stringify({ ...emptyWorkspace(), preferences: { genres: null, platforms: [] } });
+    await evaluate('localStorage.setItem("gamevault_workspace_v1",'+JSON.stringify(invalidWorkspaceText)+')');
+    await navigate("/preferences", ".workspace-recovery");
+    assert.equal(await evaluate('document.querySelector(".workspace-form button").disabled'), true, "invalid device workspace is protected");
+    assert.equal(await evaluate('localStorage.getItem("gamevault_workspace_v1")'), invalidWorkspaceText);
+    await evaluate('window.__workspaceDownload=null;HTMLAnchorElement.prototype.click=function(){window.__workspaceDownload={url:this.href,name:this.download};};[...document.querySelectorAll(".workspace-recovery button")].find(b=>b.textContent.includes("Download original workspace data")).click();');
+    await waitFor(() => evaluate('!!window.__workspaceDownload'), "original workspace download");
+    assert.equal(await evaluate('fetch(window.__workspaceDownload.url).then(r=>r.text())'), invalidWorkspaceText);
+    assert.equal(await evaluate('window.__workspaceDownload.name'), "gamevault-device-workspace-original.txt");
+    for (const width of [320, 375, 768, 1440]) {
+      await cdp("Emulation.setDeviceMetricsOverride", { width, height: 1000, deviceScaleFactor: 1, mobile: width < 600 });
+      assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'), true, "workspace recovery layout at " + width);
+    }
+    await navigate("/wrapped", ".workspace-recovery");
+    assert.equal(await evaluate('!!document.querySelector(".dashboard-stats")'), false, "invalid workspace cannot appear as zero annual activity");
+    await navigate("/preferences", ".workspace-recovery");
+    const repairedWorkspace = { ...emptyWorkspace(), profile: { name: "Repaired device workspace", bio: "" } };
+    await evaluate('localStorage.setItem("gamevault_workspace_v1",'+JSON.stringify(JSON.stringify(repairedWorkspace))+');[...document.querySelectorAll(".workspace-recovery button")].find(b=>b.textContent.includes("Retry device workspace")).click();');
+    await waitFor(() => evaluate('!document.querySelector(".workspace-recovery")&&document.querySelector(".workspace-form input").value==="Repaired device workspace"'), "reread repaired workspace");
+    assert.equal(await evaluate('document.querySelector(".workspace-form button").disabled'), false);
     await navigate("/", ".hero h1");
     await delay(250);
     const shot = await cdp("Page.captureScreenshot", { format: "png" });
@@ -2992,7 +3131,7 @@ async function port() {
     console.log("Visual screenshot: " + shotPath);
     assert.deepEqual(errors, []);
     console.log(
-      "PASS: original device backup download/protected edits/repair; screenshot recovery, trailer source-error retry/focus and linked alert validation; wishlist pending guard, editions/DLC retry/stale pages/keyboard cache and media/requirements semantics; multi-store capability resets and late provider success/error isolation; zero/year/invalid filter semantics, incomplete numeric reset, AX names and keyboard focus; lucky combined filters and invalidation, catalogue debounce/stale reads/page retry/deduplication/genre navigation; independent annual summary retry; review/collection conflicts, draft isolation and late redirect; review-report retry and collection draft isolation; journal editing lifecycle and library selection; preferences pending-save drafts/reload and alert error/retry; account-alert session loading race; themed primary contrast, cover fallback and cancelled pending auth; private alert-history error/retry/pagination/mobile; duplicate/paused/uncertain-retry price alerts; discussion reply edits/conflicts/direct links/unavailable privacy clearing/report moderation history/disabled capability; social profile publishing/review spoilers and escaping/likes/shared collections/inbox and responsive social routes; normalized journal pagination/search/import/review CRUD and summaries; collections/journal/spoiler/picker/comparison/watchlist/PNG and 15 responsive routes; multi-store deal pagination/filter/custom budget; account sign-in/import/save/refresh/sign-out plus guest add/favorite/journal/persistence/dashboard/removal, search empty and retry, mobile menu, dialog keyboard, and 7 routes at 1920/1440/1024/768/390/375/320px.",
+      "PASS: complete account/device JSON exports, retry/duplicate/focus/stale-file protection; nested workspace rejection/download/reread and unavailable analytics; original device backup download/protected edits/repair; screenshot recovery, trailer source-error retry/focus and linked alert validation; wishlist pending guard, editions/DLC retry/stale pages/keyboard cache and media/requirements semantics; multi-store capability resets and late provider success/error isolation; zero/year/invalid filter semantics, incomplete numeric reset, AX names and keyboard focus; lucky combined filters and invalidation, catalogue debounce/stale reads/page retry/deduplication/genre navigation; independent annual summary retry; review/collection conflicts, draft isolation and late redirect; review-report retry and collection draft isolation; journal editing lifecycle and library selection; preferences pending-save drafts/reload and alert error/retry; account-alert session loading race; themed primary contrast, cover fallback and cancelled pending auth; private alert-history error/retry/pagination/mobile; duplicate/paused/uncertain-retry price alerts; discussion reply edits/conflicts/direct links/unavailable privacy clearing/report moderation history/disabled capability; social profile publishing/review spoilers and escaping/likes/shared collections/inbox and responsive social routes; normalized journal pagination/search/import/review CRUD and summaries; collections/journal/spoiler/picker/comparison/watchlist/PNG and 15 responsive routes; multi-store deal pagination/filter/custom budget; account sign-in/import/save/refresh/sign-out plus guest add/favorite/journal/persistence/dashboard/removal, search empty and retry, mobile menu, dialog keyboard, and 7 routes at 1920/1440/1024/768/390/375/320px.",
     );
   } catch (error) {
     console.error(
@@ -3013,6 +3152,7 @@ async function port() {
     }
     edge.kill();
     vite.kill();
+    if (releasePrivateExport) releasePrivateExport();
     if (releaseRelatedEditions) releaseRelatedEditions();
     while (wishlistReleases.length) wishlistReleases.shift()();
     if (releaseCatalogueRead) releaseCatalogueRead();
