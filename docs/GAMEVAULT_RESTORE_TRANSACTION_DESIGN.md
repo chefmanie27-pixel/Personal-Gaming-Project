@@ -42,3 +42,7 @@ Two localStorage keys do not form an atomic transaction, and checking their valu
 ## Delivered preparation increment
 
 Authenticated read-only preparation and signed-plan verification are now implemented; see GAMEVAULT_RESTORE_PREPARATION.md. The upload/confirmation UI and every commit/device-application section above remain design requirements. No write endpoint is enabled.
+
+## Delivered review UI - 10 November 2026
+
+The explicit account upload-consent and server-plan review UI is delivered with expiry and stale-operation tests. Review is a local acknowledgment only; no commit authorization or apply action is enabled. Transactional account application and recoverable device storage remain the next implementation gates.

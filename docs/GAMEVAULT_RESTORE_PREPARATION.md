@@ -1,10 +1,10 @@
 # Account restore preparation API
 
-Implemented: POST /api/private-restore/prepare. This authenticated endpoint is read-only. It is not called by the current Preferences preview, which continues to process selected files locally. There is no apply endpoint or restore write transaction.
+Implemented: POST /api/private-restore/prepare. This authenticated endpoint is read-only. The local Preferences preview continues to process selected files locally. A separate account-only consent panel now calls this endpoint only after the user consents and clicks Upload and prepare plan. There is no apply endpoint or restore write transaction.
 
 ## Request
 
-Content-Type must be application/json. The strict envelope contains destination: account, policy: destination-wins-v1, uploadConsent: true and backup: the complete parsed version-1 private-data document. Client-provided user IDs and query parameters are rejected. The authenticated token supplies ownership. A future UI must explicitly explain private-file upload and obtain consent before calling this endpoint. A boolean request field is a protocol requirement, not evidence that a UI has explained consent.
+Content-Type must be application/json. The strict envelope contains destination: account, policy: destination-wins-v1, uploadConsent: true and backup: the complete parsed version-1 private-data document. Client-provided user IDs and query parameters are rejected. The authenticated token supplies ownership. The Preferences preparation panel explicitly explains private-file upload and requires consent before calling this endpoint. A boolean request field is a protocol requirement, not evidence that a UI has explained consent.
 
 Authentication precedes JSON parsing. The entire uncompressed request is limited to 32 MiB, including its envelope; compressed requests and invalid UTF-8 are rejected. Backup traversal is bounded at depth 40, one million nodes and 100,000 keys/entries per container. Unsafe object keys, unsupported versions/shapes, duplicate keys by record identity, broken collection references and invalid account field values fail validation. Account schemas must not silently trim notes or strip snapshot/workspace extensions. Valid readable legacy files may therefore be incompatible with preparation. No conversion or truncation occurs.
 
@@ -24,4 +24,6 @@ verifyRestorePlan checks signature, expiry, user and recomputed source/destinati
 
 Five focused tests cover full 2,101/53 journal comparisons, all-data fingerprints, expiry/account/tamper isolation, transformations/legacy rejection, limits, explicit consent, authentication before parsing, real oversized and malformed UTF-8 bodies and unavailable destinations. Disposable MySQL coverage compares all persisted library/journal/workspace rows before and after preparation and detects a changed library note without a workspace version change.
 
-Remaining: explicit upload/confirmation UI, transactional account application with rollback/concurrent-writer/collation tests, uncertain-completion recovery and a separate atomic/recoverable device-storage design. See GAMEVAULT_RESTORE_TRANSACTION_DESIGN.md. No existing database migration or staged-feature activation is part of preparation.
+Delivered on 10 November: account upload disclosure/consent, server count review acknowledgment, bounded response validation, stale-operation guards and plan expiry. Review does not apply any data.
+
+Remaining: transactional account application with rollback/concurrent-writer/collation tests, uncertain-completion recovery and a separate atomic/recoverable device-storage design. See GAMEVAULT_RESTORE_TRANSACTION_DESIGN.md. No existing database migration or staged-feature activation is part of preparation.

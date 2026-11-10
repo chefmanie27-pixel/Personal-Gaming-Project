@@ -20,8 +20,7 @@ function gameData(value: unknown) {
   if (!parsed.success) throw new ExportDataError();
   return { ...parsed.data, ...raw } as SavedEntry["game"];
 }
-export async function readPrivateExport(client: PrismaClient, userId: string, maxBytes?: number): Promise<string> {
-  return client.$transaction(async tx => {
+export async function readPrivateExportTransaction(tx: Prisma.TransactionClient, userId: string, maxBytes?: number): Promise<string> {
     const row = await tx.userWorkspace.findUnique({ where: { userId } });
     const workspace = workspaceData(row ? row.data : {});
     const mode = row?.journalMigrated ? "normalized" : "legacy";
@@ -63,6 +62,8 @@ export async function readPrivateExport(client: PrismaClient, userId: string, ma
       }
     }
     return output.finish();
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, maxWait: 5000, timeout: 30000 });
+}
+export async function readPrivateExport(client: PrismaClient, userId: string, maxBytes?: number): Promise<string> {
+  return client.$transaction(tx => readPrivateExportTransaction(tx,userId,maxBytes), { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, maxWait: 5000, timeout: 30000 });
 }
 export const databasePrivateExport: PrivateExportRepository = { read: userId => readPrivateExport(prisma, userId) };

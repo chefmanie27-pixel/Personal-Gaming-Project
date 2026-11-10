@@ -101,6 +101,9 @@ async function port() {
   let holdWishlist = false, wishlistWrites = 0;
   const wishlistReleases = [];
   let failPrivateExport = false, holdPrivateExport = false, releasePrivateExport = null, privateExportReads = 0;
+  let prepareRequests = 0, failPreparation = false, holdPreparation = false, releasePreparation = null, planLifetime = 600000;
+  const preparationUploads = [];
+  let applicationAvailable=false,applyRequests=0,holdApply=false,releaseApply=null,dropApplyResponse=false;
   let failGames = false;
   let catalogueFilterFixtures = false;
   let cataloguePaged = false, failCataloguePage = null, holdCatalogueSearch = null, releaseCatalogueRead = null;
@@ -734,6 +737,37 @@ async function port() {
     const url = new URL(req.url, "http://localhost");
     requests.push(url.pathname + url.search);
     let body;
+    if(url.pathname==="/api/private-restore/apply"){
+      let raw="";req.on("data",chunk=>{raw+=chunk;});req.on("end",()=>{
+        const input=JSON.parse(raw);applyRequests++;assert.equal(input.confirmApply,true);assert.equal(input.uploadConsent,true);assert.equal(input.destination,"account");
+        const execute=()=>{
+          let libraryAdded=0,journalAdded=0;const data=input.backup.data;
+          for(const row of data.library)if(!accountEntries.has(row.game.slug)){accountEntries.set(row.game.slug,row);libraryAdded++;}
+          for(const row of data.journal)if(!accountJournal.has(row.id)){accountJournal.set(row.id,{...row,version:0});journalAdded++;}
+          const original=accountWorkspace.data, incoming=data.workspace;
+          const merge=(a,b,key)=>[...new Map([...a,...b].map(row=>[key(row),row])).values()];
+          accountWorkspace={version:accountWorkspace.version+1,data:{...original,collections:merge(incoming.collections,original.collections,r=>r.id),goals:merge(incoming.goals??[],original.goals??[],r=>r.id),watches:merge(incoming.watches,original.watches,r=>r.game.slug),metadata:{...incoming.metadata,...original.metadata},preferences:{...original.preferences,recommendationFeedback:{...incoming.preferences.recommendationFeedback,...original.preferences.recommendationFeedback},priceAlertRules:{...incoming.preferences.priceAlertRules,...original.preferences.priceAlertRules}}}};
+          if(dropApplyResponse){dropApplyResponse=false;res.statusCode=503;res.end(JSON.stringify({error:"Commit acknowledgment unavailable"}));return;}
+          res.end(JSON.stringify({restored:true,libraryAdded,journalAdded,workspaceVersion:accountWorkspace.version}));
+        };
+        if(holdApply){releaseApply=execute;return;}execute();
+      });return;
+    }
+    if (url.pathname === "/api/private-restore/prepare") {
+      let raw = ""; req.on("data",chunk=>{raw+=chunk;});
+      req.on("end",()=>{
+        const input=JSON.parse(raw); prepareRequests++; preparationUploads.push(input);
+        assert.equal(input.uploadConsent,true); assert.equal(input.destination,"account"); assert.equal(input.policy,"destination-wins-v1");
+        assert.equal(req.headers.authorization,"Bearer fixture-account-token");
+        if (failPreparation) {res.statusCode=503;res.end(JSON.stringify({error:"Private preparation failure"}));return;}
+        const a=input.backup.data,b={library:[...accountEntries.values()],journal:[...accountJournal.values()],workspace:accountWorkspace.data};
+        const rows=[["Library games",a.library.map(r=>r.game.slug),b.library.map(r=>r.game.slug)],["Journal entries",a.journal.map(r=>r.id),b.journal.map(r=>r.id)],["Collections",a.workspace.collections.map(r=>r.id),b.workspace.collections.map(r=>r.id)],["Goals",(a.workspace.goals??[]).map(r=>r.id),(b.workspace.goals??[]).map(r=>r.id)],["Watches",a.workspace.watches.map(r=>r.game.slug),b.workspace.watches.map(r=>r.game.slug)],["Metadata",Object.keys(a.workspace.metadata),Object.keys(b.workspace.metadata)],["Feedback",Object.keys(a.workspace.preferences.recommendationFeedback??{}),Object.keys(b.workspace.preferences.recommendationFeedback??{})],["Alert-rule preferences",Object.keys(a.workspace.preferences.priceAlertRules??{}),Object.keys(b.workspace.preferences.priceAlertRules??{})]];
+        // Deterministic browser fixture; strict backend compatibility is tested in the API suite.
+        const result={planToken:"fixture."+"a".repeat(43),expiresAt:new Date(Date.now()+planLifetime).toISOString(),policy:"destination-wins-v1",applyAvailable:applicationAvailable,counts:rows.map(([label,incoming,existing])=>{const keys=new Set(existing),keep=incoming.filter(key=>keys.has(key)).length;return{label,inFile:incoming.length,inDestination:existing.length,add:incoming.length-keep,keep};})};
+        if(holdPreparation){releasePreparation=()=>res.end(JSON.stringify(result));return;}
+        res.end(JSON.stringify(result));
+      });return;
+    }
     if (url.pathname === "/api/private-export") {
       privateExportReads++;
       const { journal: embedded, ...metadata } = accountWorkspace.data;
@@ -1823,6 +1857,45 @@ async function port() {
       await cdp("Emulation.setDeviceMetricsOverride", { width, height: 1000, deviceScaleFactor: 1, mobile: width < 600 });
       assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'), true, "read-only preview layout at " + width);
     }
+    assert.equal(prepareRequests,0,"local preview never uploads the file");
+    await evaluate('document.querySelector(".prepare-restore").click()');
+    await delay(40);assert.equal(prepareRequests,0,"preparation requires explicit consent");
+    assert.equal(await evaluate('document.querySelector("#restore-upload-note").textContent.includes("private notes")'),true);
+    failPreparation=true;
+    await evaluate('document.querySelector(".restore-upload-consent").click();document.querySelector(".prepare-restore").click()');
+    await waitFor(()=>evaluate('document.querySelector("#restore-preparation-error").textContent.includes("could not be prepared")'),"preparation error is recoverable");
+    failPreparation=false;holdPreparation=true;
+    const beforePrepare=prepareRequests;
+    await evaluate('document.querySelector(".prepare-restore").focus();document.querySelector(".prepare-restore").click();document.querySelector(".prepare-restore").click()');
+    await waitFor(()=>!!releasePreparation,"held consented preparation");
+    assert.equal(prepareRequests,beforePrepare+1,"pending duplicate uploads are suppressed");
+    holdPreparation=false;releasePreparation();releasePreparation=null;
+    await waitFor(()=>evaluate('!!document.querySelector(".server-restore-plan")'),"server plan review");
+    assert.equal(await evaluate('document.activeElement===document.querySelector(".prepare-restore")'),true);
+    assert.deepEqual(preparationUploads.at(-1).backup,previewBackup,"uploaded fields remain unchanged");
+    assert.deepEqual(await evaluate('[...document.querySelectorAll(".server-restore-plan tbody tr")][1].textContent.includes("Journal entries")'),true);
+    await evaluate('document.querySelector(".review-restore-plan").click()');
+    await waitFor(()=>evaluate('document.querySelector("#restore-preparation-status").textContent.includes("plan reviewed")'),"local plan review acknowledgment");
+    assert.equal(await evaluate('document.querySelector(".server-restore-plan").textContent.includes("Applying backups is unavailable")'),true);
+    assert.equal(await evaluate('document.querySelector(".server-restore-plan").textContent.includes("fixture."+"a".repeat(43))'),false,"plan token is not rendered");
+    for(const width of [320,375,768,1440]){await cdp("Emulation.setDeviceMetricsOverride",{width,height:1100,deviceScaleFactor:1,mobile:width<600});assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,"preparation layout at "+width);}
+    assert.equal(JSON.stringify(accountWorkspace),accountBeforePreview);assert.equal(JSON.stringify([...accountEntries.values()]),libraryBeforePreview);
+    await evaluate('document.querySelector(".restore-upload-consent").click()');
+    assert.equal(await evaluate('!!document.querySelector(".server-restore-plan")'),false,"revoking consent discards the plan");
+    holdPreparation=true;
+    await evaluate('document.querySelector(".restore-upload-consent").click();document.querySelector(".prepare-restore").click()');
+    await waitFor(()=>!!releasePreparation,"obsolete preparation held");
+    await evaluate('document.querySelector(".restore-upload-consent").click()');
+    holdPreparation=false;releasePreparation();releasePreparation=null;await delay(70);
+    assert.equal(await evaluate('!!document.querySelector(".server-restore-plan")'),false,"revoked consent discards a late plan");
+    planLifetime=800;
+    await evaluate('document.querySelector(".restore-upload-consent").click();document.querySelector(".prepare-restore").click()');
+    await waitFor(()=>evaluate('!!document.querySelector(".server-restore-plan")'),"expiring server plan");
+    await waitFor(()=>evaluate('document.querySelector("#restore-preparation-error").textContent.includes("expired")'),"server plan expiry feedback");
+    planLifetime=600000;
+    assert.equal(await evaluate('document.querySelector(".restore-upload-consent").checked'),false);
+    assert.equal(await evaluate('!!document.querySelector(".server-restore-plan")'),false);
+    assert.equal(await evaluate('window.__privateFiles.length'),2,"preparation never downloads or applies a backup");
     const savedDeviceBeforePreview = await evaluate('localStorage.getItem("gamevault_workspace_v1")');
     await evaluate('{const target=document.querySelector(".restore-preview select");target.value="device";target.dispatchEvent(new Event("change",{bubbles:true}));}');
     assert.equal(await evaluate('!!document.querySelector(".restore-preview-summary")'), false, "destination changes require a fresh comparison");
@@ -1855,6 +1928,47 @@ async function port() {
     assert.equal(privateExportReads, readsBeforeInvalidPreview + 1, "cancelled local read cannot start an account comparison");
     assert.equal(await evaluate('!!document.querySelector(".restore-preview-summary")'), false);
     assert.equal(await evaluate('document.querySelector(".restore-preview input[type=file]").files.length'), 0);
+    applicationAvailable=true;
+    const restoreFile=JSON.parse(JSON.stringify(accountFile));
+    const restoreRow={...restoreFile.data.journal[0],id:"00000000-0000-4000-8000-000000000091",notes:"Account restore fixture"};
+    restoreFile.data.journal.push(restoreRow);
+    await choosePreviewFile(JSON.stringify(restoreFile));
+    await evaluate('document.querySelector(".preview-backup").click()');
+    await waitFor(()=>evaluate('!!document.querySelector(".restore-preview-summary")'),"account apply local preview");
+    await evaluate('document.querySelector(".restore-upload-consent").click();document.querySelector(".prepare-restore").click()');
+    await waitFor(()=>evaluate('!!document.querySelector(".apply-account-restore")'),"capability-gated account apply");
+    await evaluate('document.querySelector(".apply-account-restore").click()');await delay(40);assert.equal(applyRequests,0,"review and typed destination are required");
+    await evaluate('{document.querySelector(".review-restore-plan").click();const input=document.querySelector(".restore-account-confirmation");input.value="wrong@example.invalid";input.dispatchEvent(new Event("input",{bubbles:true}));document.querySelector(".apply-account-restore").click()}');await delay(40);assert.equal(applyRequests,0);
+    await evaluate('{const input=document.querySelector(".restore-account-confirmation");input.value="fixture@example.invalid";input.dispatchEvent(new Event("input",{bubbles:true}));}');
+    for(const width of [320,375,768,1440]){await cdp("Emulation.setDeviceMetricsOverride",{width,height:1100,deviceScaleFactor:1,mobile:width<600});assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,"apply confirmation layout at "+width);}
+    holdApply=true;
+    await evaluate('document.querySelector(".apply-account-restore").click();document.querySelector(".apply-account-restore").click()');
+    await waitFor(()=>!!releaseApply,"held account transaction");assert.equal(applyRequests,1,"duplicate account writes are suppressed");
+    assert.equal(await evaluate('document.querySelector(".restore-preview input[type=file]").disabled'),true,"source cannot change during apply");
+    holdApply=false;releaseApply();releaseApply=null;
+    await waitFor(()=>evaluate('document.querySelector(".account-restore-status").textContent.includes("Restore committed")'),"confirmed commit feedback");
+    await waitFor(()=>evaluate('document.querySelector(".preview-backup").getAttribute("aria-disabled")==="false"'),"account reload after commit");
+    assert.ok(accountJournal.has(restoreRow.id));assert.equal(accountJournal.get(restoreRow.id).version,0);assert.equal(accountEntries.size,JSON.parse(libraryBeforePreview).length);
+    assert.equal(await evaluate('!!document.querySelector(".server-restore-plan")'),false,"accepted plan cannot be reused");
+    // A committed server response can be lost: reconciliation must precede retry.
+    const secondRow={...restoreRow,id:"00000000-0000-4000-8000-000000000092"};restoreFile.data.journal.push(secondRow);
+    await choosePreviewFile(JSON.stringify(restoreFile));await evaluate('document.querySelector(".preview-backup").click()');
+    await waitFor(()=>evaluate('!!document.querySelector(".restore-preview-summary")'),"uncertain-completion preview");
+    await evaluate('document.querySelector(".restore-upload-consent").click();document.querySelector(".prepare-restore").click()');
+    await waitFor(()=>evaluate('!!document.querySelector(".apply-account-restore")'),"second apply plan");
+    await evaluate('{document.querySelector(".review-restore-plan").click();const input=document.querySelector(".restore-account-confirmation");input.value="fixture@example.invalid";input.dispatchEvent(new Event("input",{bubbles:true}));}');
+    dropApplyResponse=true;await evaluate('document.querySelector(".apply-account-restore").click()');
+    try { await waitFor(()=>evaluate('document.querySelector(".account-restore-error").textContent.includes("uncertain")'),"uncertain completion disclosure"); } catch(reason) { throw new Error(reason.message+" "+JSON.stringify({applyRequests,details:await evaluate('({error:document.querySelector(".account-restore-error")?.textContent,status:document.querySelector(".account-restore-status")?.textContent,disabled:document.querySelector(".apply-account-restore")?.getAttribute("aria-disabled"),confirmation:document.querySelector(".restore-account-confirmation")?.value,reviewed:document.querySelector(".review-restore-plan")?.checked})')})); }
+    assert.ok(accountJournal.has(secondRow.id));assert.equal(applyRequests,2);
+    await evaluate('document.querySelector(".reload-restored-account").click()');
+    await waitFor(()=>evaluate('document.querySelector(".account-restore-status").textContent.includes("reloaded")'),"authoritative reload before retry");
+    assert.equal(applyRequests,2,"reload never repeats the write");
+    await evaluate('document.querySelector(".preview-backup").click()');await waitFor(()=>evaluate('!!document.querySelector(".restore-preview-summary")'),"reconciled preview");
+    await evaluate('document.querySelector(".restore-upload-consent").click();document.querySelector(".prepare-restore").click()');
+    await waitFor(()=>evaluate('!!document.querySelector(".apply-account-restore")'),"fresh post-reconciliation plan");
+    assert.equal(await evaluate('Number(document.querySelectorAll(".server-restore-plan tbody tr")[1].querySelectorAll("td")[1].textContent)'),0,"already committed journal rows are not added again");
+    assert.equal(await evaluate('localStorage.getItem("gamevault_workspace_v1")'),savedDeviceBeforePreview,"account restore preserves device data");
+    applicationAvailable=false;
     failSummaryYear = 2025;
     await navigate("/wrapped", ".dashboard-stats");
     await evaluate('document.querySelector(".year-control input").value=2026;document.querySelector(".year-control input").dispatchEvent(new Event("input",{bubbles:true}))');

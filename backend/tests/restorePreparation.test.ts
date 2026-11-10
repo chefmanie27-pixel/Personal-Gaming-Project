@@ -34,6 +34,7 @@ test("validation refuses legacy identifiers, trimming, unknown fields, ambiguous
 });
 
 test("combined workspace capacity is checked without truncating either source",()=>{
+ assert.throws(()=>prepareRestore("alice",doc(5002),doc(),secret,now),/5,000/);
  const source=doc(),destination=doc();const collections=(prefix:number)=>Array.from({length:60},(_,n)=>({id:"00000000-0000-4000-8000-"+String(prefix+n).padStart(12,"0"),name:"Collection"}));source.data.workspace.collections=collections(0);destination.data.workspace.collections=collections(100);assert.throws(()=>prepareRestore("alice",source,destination,secret,now),/combined workspace/);
 });
 

@@ -147,7 +147,7 @@ async function save() {
       </button>
     </section>
     <PrivateDataExport />
-    <RestorePreview />
+    <RestorePreview :unsaved-preferences="dirty" />
     <p class="muted">
       Password reset and release emails are not enabled: this installation has
       no email delivery service. Manage login and price alerts from your

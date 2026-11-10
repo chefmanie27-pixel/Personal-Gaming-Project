@@ -13,3 +13,5 @@ The preview is advisory. There is no apply action. A future implementation must 
 Validation is covered by frontend parser/comparison and scoped-operation tests, including 2,101 normalized journal entries and unchanged source/destination data. Full assistive-technology, production resource and actual restore acceptance remain outstanding.
 
 Saved store changes invalidate an active comparison. Relevant device-storage events, returning window focus and returning document visibility also discard counts and require a fresh preview while retaining the selected file. This cannot detect arbitrary remote edits while a page stays active; server revalidation remains necessary. See GAMEVAULT_RESTORE_TRANSACTION_DESIGN.md for the proposed commit boundary.
+
+As of 10 November 2026, a separate account preparation panel follows a successful account preview. It explains private backup upload and requires fresh consent plus an explicit preparation click. The local preview itself still uploads nothing. Server plans can be reviewed, expire automatically and are discarded on relevant context/consent changes. Applying backups remains unavailable.

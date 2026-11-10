@@ -14,6 +14,8 @@ import { createSocialRouter } from "./social.js";
 import "dotenv/config";
 import { createPrivateExportRouter } from "./privateExport.js";
 import { createRestorePreparationRouter } from "./restorePreparation.js";
+import { createRestoreApplicationRouter } from "./restoreApplication.js";
+import { databaseRestoreApplication } from "./restoreApplicationRepository.js";
 import { databasePrivateExport } from "./privateExportRepository.js";
 import { createJournalRouter } from "./journal.js";
 import { databaseJournal } from "./journalRepository.js";
@@ -85,7 +87,7 @@ app.use(
   artworkRouter,
 );
 app.use("/api/private-export", createPrivateExportRouter(databasePrivateExport));
-app.use("/api/private-restore", createRestorePreparationRouter(databasePrivateExport));
+app.use("/api/private-restore", createRestorePreparationRouter(databasePrivateExport,config.JWT_SECRET,true), createRestoreApplicationRouter(databaseRestoreApplication));
 app.use(express.json());
 app.use("/api/discussions", createDiscussionsRouter());
 app.use("/api/games", observationRouter);

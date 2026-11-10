@@ -96,10 +96,20 @@ function summarize(source: Document, destination: Document) {
   if (combined.data.library.length > 100000 || combined.data.journal.length > 100000 || Buffer.byteLength(JSON.stringify(combined),"utf8") > PRIVATE_EXPORT_MAX_BYTES) throw new RestorePreparationError(409,"Combined private data exceeds preparation limits. No data was changed.");
   return [count("Library games",a.library.map(row=>row.game.slug),b.library.map(row=>row.game.slug)), count("Journal entries",a.journal.map(row=>row.id),b.journal.map(row=>row.id)), count("Collections",a.workspace.collections.map(row=>row.id),b.workspace.collections.map(row=>row.id)), count("Goals",(a.workspace.goals??[]).map(row=>row.id),(b.workspace.goals??[]).map(row=>row.id)), count("Watches",a.workspace.watches.map(row=>row.game.slug),b.workspace.watches.map(row=>row.game.slug)), count("Metadata",Object.keys(a.workspace.metadata),Object.keys(b.workspace.metadata)), count("Feedback",Object.keys(a.workspace.preferences.recommendationFeedback??{}),Object.keys(b.workspace.preferences.recommendationFeedback??{})), count("Alert-rule preferences",Object.keys(a.workspace.preferences.priceAlertRules??{}),Object.keys(b.workspace.preferences.priceAlertRules??{}))];
 }
+export function restoreChanges(sourceValue: unknown, destinationValue: unknown) {
+  const source=validateRestoreDocument(sourceValue), destination=validateRestoreDocument(destinationValue);
+  summarize(source,destination); // Apply the same merged limits and ambiguity checks as preparation.
+  const a=source.data,b=destination.data;
+  const knownLibrary=new Set(b.library.map(row=>row.game.slug)),knownJournal=new Set(b.journal.map(row=>row.id));
+  const workspace={...b.workspace, preferences:{...b.workspace.preferences,recommendationFeedback:{...a.workspace.preferences.recommendationFeedback,...b.workspace.preferences.recommendationFeedback},priceAlertRules:{...a.workspace.preferences.priceAlertRules,...b.workspace.preferences.priceAlertRules}}, collections:merge(a.workspace.collections,b.workspace.collections,row=>row.id),goals:merge(a.workspace.goals??[],b.workspace.goals??[],row=>row.id),watches:merge(a.workspace.watches,b.workspace.watches,row=>row.game.slug),metadata:{...a.workspace.metadata,...b.workspace.metadata},journal:[]};
+  return {workspace:workspaceSchema.parse(workspace),library:a.library.filter(row=>!knownLibrary.has(row.game.slug)),journal:a.journal.filter(row=>!knownJournal.has(row.id))};
+}
 export function prepareRestore(userId: string, sourceValue: unknown, destinationValue: unknown, secret: string, now = Date.now()) {
   const source = validateRestoreDocument(sourceValue), destination = validateRestoreDocument(destinationValue);
   if (destination.source.kind !== "account" || destination.source.journalMode !== "normalized") throw new RestorePreparationError(409, "Preparation currently requires a normalized account destination. No data was changed.");
-  const counts = summarize(source,destination), expiresAt = now + 10 * 60 * 1000;
+  const counts = summarize(source,destination);
+  if(counts[0].add+counts[1].add>5000)throw new RestorePreparationError(413,"Restore up to 5,000 new library/journal records per transaction. No data was changed.");
+  const expiresAt = now + 10 * 60 * 1000;
   const payload = Buffer.from(JSON.stringify({ purpose: "gamevault-restore-prepare-v1", userId, source: documentDigest(source), destination: documentDigest(destination), policy: "destination-wins-v1", expiresAt })).toString("base64url");
   const signature = createHmac("sha256",secret).update(payload).digest("base64url");
   return { planToken: payload + "." + signature, expiresAt: new Date(expiresAt).toISOString(), policy: "destination-wins-v1", counts, applyAvailable: false, warning: "Preparation only. Database collation and current data must be revalidated before any future restore." };
@@ -115,7 +125,7 @@ export function verifyRestorePlan(token: string, userId: string, source: unknown
     return prepareRestore(userId,source,destination,secret,payload.expiresAt - 600000).planToken === token;
   } catch { return false; }
 }
-export function createRestorePreparationRouter(repo: PrivateExportRepository, secret = config.JWT_SECRET) {
+export function createRestorePreparationRouter(repo: PrivateExportRepository, secret = config.JWT_SECRET, applyAvailable = false) {
   const router = Router();
   router.use((_req,res,next)=>{res.setHeader("Cache-Control","no-store");next();});
   router.use(requireAuth);
@@ -129,7 +139,7 @@ export function createRestorePreparationRouter(repo: PrivateExportRepository, se
       try { destination = JSON.parse(saved); validateRestoreDocument(destination); }
       catch { return res.status(503).json({error:"Complete compatible account data could not be read. No plan was created."}); }
       const result = prepareRestore(req.user!.id,input.data.backup,destination,secret);
-      return res.json(result);
+      return res.json({...result,applyAvailable,warning:applyAvailable?"Confirm the account plan explicitly before applying. Current data will be checked again in the transaction.":result.warning});
     } catch(error) {
       if(error instanceof RestorePreparationError) return res.status(error.status).json({error:error.message});
       return res.status(503).json({error:"Restore preparation could not read complete compatible account data. No data was changed."});

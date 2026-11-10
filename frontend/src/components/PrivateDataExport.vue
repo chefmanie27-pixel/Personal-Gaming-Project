@@ -7,7 +7,7 @@ const { source, busy, error, notice, blockedReason, start } = usePrivateExport()
 <template>
   <section class="account-panel private-export" aria-labelledby="private-export-heading">
     <h2 id="private-export-heading">Export private library, workspace and journal</h2>
-    <p id="private-export-note" class="muted">Downloads saved private notes, preferences, collections and the complete journal as JSON. Choose account or device data; they stay separate. Unsaved form drafts, the account wishlist, active price alerts, social content and linked-account secrets are excluded. Nothing is posted or uploaded. Applying a restore is not enabled; a read-only preview is available below.</p>
+    <p id="private-export-note" class="muted">Downloads saved private notes, preferences, collections and the complete journal as JSON. Choose account or device data; they stay separate. Unsaved form drafts, the account wishlist, active price alerts, social content and linked-account secrets are excluded. Nothing is posted or uploaded. A local preview and separate confirmed account restore are available below. Direct device restore is not supported.</p>
     <label>Export source<select v-model="source" aria-label="Private data source" :disabled="busy"><option value="device">This device</option><option value="account" :disabled="!auth.token || !auth.user">My account</option></select></label>
     <p v-if="blockedReason" class="muted">{{ blockedReason }}</p>
     <button class="button ghost" :aria-disabled="busy || !!blockedReason" aria-describedby="private-export-note private-export-status private-export-error" @click="start">{{ busy ? "Preparing private export..." : "Download private JSON" }}</button>
